@@ -1,0 +1,25 @@
+# Intent Interface Prototype - Dependencies
+
+# Core dependencies
+pyyaml>=6.0
+
+# Vision module dependencies (Week 1)
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Object detection (Week 1-2)
+ultralytics>=8.0.0  # YOLOv8 for real object recognition (80 classes)
+                    # Recognizes: person, phone, laptop, cup, chair, etc.
+
+# UI dependencies (Week 1)
+Pillow>=10.0.0  # For image conversion (PIL)
+
+# Testing (optional)
+pytest>=7.0.0
+
+# Robotics simulation (Week 1+ Robotics)
+pybullet>=3.2.5  # Physics simulation for robotic arm
+scipy>=1.11.0  # For rotation/transformation math
+
+# Week 7: BrainLink Lite serial communication
+pyserial>=3.5

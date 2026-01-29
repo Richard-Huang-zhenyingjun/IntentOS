@@ -1,0 +1,31 @@
+{
+  "session": {
+    "duration_s": 0.0013270378112792969,
+    "frame_count": 10
+  },
+  "performance": {
+    "avg_fps": 31327.08507867658,
+    "avg_frame_time_ms": 0.033974647521972656
+  },
+  "trust": {
+    "false_executions": 0,
+    "executions_started": 0,
+    "executions_completed": 0,
+    "executions_failed": 0,
+    "executions_cancelled": 0,
+    "success_rate": 0.0,
+    "blocked_unstable": 0,
+    "pauses_triggered": 0,
+    "pauses_by_trigger": {},
+    "undos_performed": 0,
+    "target_loss_events": 0,
+    "eeg_dropout_events": 0,
+    "session_duration": 0.0024831295013427734
+  },
+  "eeg_quality": {
+    "stable_ratio": 1.0,
+    "avg_attention": null,
+    "total_frames": 0
+  },
+  "actions": {}
+}

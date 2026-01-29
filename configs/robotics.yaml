@@ -1,0 +1,206 @@
+# Physics engine settings
+physics:
+  timestep: 0.008333  # 120 Hz (1/120 = 0.008333)
+  gravity: [0, 0, -9.81]
+  num_solver_iterations: 50
+  use_real_time: false  # Run as fast as possible
+
+# PyBullet GUI settings
+scene:
+  use_gui: true
+  camera:
+    distance: 1.5      # Initial zoom (increase for farther, decrease for closer)
+    yaw: 50           # Horizontal rotation angle (0-360)
+    pitch: -35        # Vertical tilt angle (-90 to 90)
+    target: [0.3, 0, 0.2]  # Camera focus point (x, y, z)
+
+# Table dimensions
+table:
+  height: 0.6         # 60 cm tall
+  dimensions: [0.8, 1.2, 0.05]  # width, depth, thickness
+  position: [0, 0, 0.575]       # centered, height/2 below surface
+  color: [0.6, 0.4, 0.2, 1.0]   # wood brown RGBA
+
+# Object to manipulate
+object:
+  type: cube
+  size: 0.04          # 4cm cube
+  mass: 0.05          # 50 grams
+  start_pose:
+    position: [0.3, 0.0, 0.65]  # on table surface
+    orientation: [0, 0, 0, 1]   # quaternion (no rotation)
+  color: [0.8, 0.2, 0.2, 1.0]   # red RGBA
+
+# Robot arm configuration
+robot:
+  use_builtin: true
+  model_name: "kuka_iiwa/model.urdf"  # Built-in PyBullet URDF
+  base_pose:
+    position: [0, 0, 0.6]      # on table surface
+    orientation: [0, 0, 0, 1]  # upright
+  # Week 5: Default joint configuration (non-singular pose)
+  default_joints: [0.0, 0.5, 0.0, -1.2, 0.0, 0.8, 0.0]  # Bent-arm configuration
+  ee_link_name: "lbr_iiwa_link_7"  # End effector link (KUKA specific)
+
+# Week 2: Action availability thresholds
+thresholds:
+  ee_min_z: 0.25        # Minimum EE height before reaching (25cm above table)
+  ee_target_z: 0.35     # Target height after MOVE_ARM_UP (35cm)
+  reach_close_xy: 0.10  # XY distance threshold for "close to object" (10cm)
+  grasp_dist: 0.06      # 3D distance threshold for grasp availability (6cm)
+
+# Week 2: Action goal parameters (used in Week 5+ for execution)
+actions:
+  move_up:
+    delta_z: 0.10                # Lift by 10cm
+    min_z: 0.65                  # Minimum safe height (above table+base at 0.6m)
+    max_z: 2.10                  # Maximum reach height
+  reach_forward:
+    approach_height_z: 0.10      # Stay 10cm above object
+    max_reach_dist_m: 0.60       # Maximum reach distance from base
+
+# Week 3: Gaze/mouse selection parameters
+selection:
+  dwell_frames: 18           # Frames to hold before lock (~0.6s at 30fps)
+  unlock_grace_frames: 10    # Frames of no-hit before unlock (~0.3s)
+  allow_mouse_fallback: true # Always enable mouse as backup
+  
+  # Gaze estimation (webcam)
+  gaze:
+    enabled: true            # Try webcam gaze first
+    camera_id: 0             # Default webcam
+    width: 640
+    height: 480
+    confidence_threshold: 0.5  # Min confidence to use gaze over mouse
+
+# Week 5: Motion control parameters
+control:
+  hz: 120                        # Physics rate (matches timestep)
+  max_steps_per_action: 1200     # 10s timeout @ 120Hz
+  settle_steps_after: 15         # Frames to settle after reaching target (reduced for faster response)
+  
+# Week 5: Safety limits
+safety:
+  max_joint_vel_rad_s: 7.5       # Max joint velocity (rad/s) - 3x faster (was 2.5)
+  max_joint_step_rad: 0.15       # Max joint change per tick (rad) - 3x larger steps (was 0.05)
+  pos_tolerance_m: 0.02          # Position error tolerance (2cm)
+  orn_tolerance_rad: 0.25        # Orientation error tolerance (~14°)
+
+# Week 6: Grasping parameters
+grasp:
+  attach_dist_m: 0.06              # Max distance to attach (6cm)
+  attach_orn_tolerance_rad: 0.6    # Orientation tolerance (~34°)
+  constraint_max_force: 200        # PyBullet constraint force
+  detach_on_cancel: true           # Auto-detach when cancelled
+  pregrasp_height_z: 0.10          # Approach height above object
+  lift_after_grasp_delta_z: 2.5   # Lift 250cm (2.5m) after grasp - 10x higher for dramatic visibility
+  enable_post_grasp_lift: true     # Whether to lift after grasp
+
+# Place zone configuration (where to place objects)
+place_zone:
+  position: [0.0, 0.0, 0.65]      # Center of table surface (x, y, z in meters)
+  approach_height_z: 0.10         # Height above place zone for approach (10cm)
+  place_dist_threshold: 0.08      # Distance threshold for "at place zone" (8cm)
+
+# Week 7: EEG/BCI configuration
+eeg:
+  enabled: true
+  source: brainlink              # "mock" or "brainlink"
+  
+  # BrainLink hardware connection
+  brainlink:
+    transport: serial            # "serial" (Week 7) | "bluetooth" (future)
+    serial_port: ""              # Empty = auto-scan, or specify "/dev/tty.BrainLink" or "COM5"
+    baudrate: 57600              # Standard BrainLink baud rate
+    read_timeout: 0.1            # Serial read timeout (seconds)
+    packet_timeout: 2.0          # Max time between valid packets
+  
+  # Metric mapping
+  mapping:
+    confirm_metric: attention    # Primary metric for CONFIRM
+    cancel_metric: meditation    # Optional metric for CANCEL (or use attention-low)
+    use_meditation_for_cancel: false  # If false, low attention = cancel
+  
+  # Decision thresholds (0-100 scale)
+  thresholds:
+    confirm_high: 70             # attention >= 70 → confirm intent
+    confirm_low: 55              # attention < 55 → reset (hysteresis)
+    cancel_high: 70              # meditation >= 70 → cancel intent (if enabled)
+    cancel_low: 55               # meditation < 55 → reset (hysteresis)
+  
+  # Decision strategy (robustness layer)
+  strategy:
+    window_seconds: 1.5          # Rolling window duration
+    min_samples: 8               # Minimum samples needed for decision
+    majority_ratio: 0.67         # Require 67% agreement in window
+    two_hit_confirm: true        # Require 2 distinct CONFIRM votes
+    two_hit_window_seconds: 0.8  # Time window for two-hit detection
+    cooldown_seconds: 1.5        # Lockout after confirm/cancel
+    
+  # Signal quality checks
+  quality:
+    max_missing_seconds: 1.5     # Max time without valid sample → unstable
+    enable_variance_check: true  # Check for erratic signals
+    max_variance: 300.0          # Metric variance threshold
+    min_signal_quality: 50       # Minimum hardware quality score (if available)
+
+# Week 8: Recovery and safety configuration
+recovery:
+  enable: true
+  
+  # Pause triggers
+  pause_on:
+    eeg_unstable: true           # Pause if EEG unstable too long
+    target_lost: true            # Pause if target disappears
+    action_timeout: true         # Pause if action takes too long
+    collision_risk: false        # Reserved for future collision detection
+  
+  # Recovery requirements
+  require_rescope_after_pause: true     # Must re-select target after pause
+  clear_confirmation_on_pause: true     # Pause clears confirmation state
+  freeze_on_pause: true                 # Freeze robot motion on pause
+  
+  # Grace periods (before triggering pause)
+  target_loss_grace_frames: 10          # ~0.3s at 30fps
+  eeg_unstable_grace_frames: 30         # ~1.0s at 30fps
+  
+  # Rest pose (safe position)
+  rest_pose:
+    enabled: true
+    joint_positions: []                 # Empty = use current pose; can specify [j0, j1, ...]
+  
+  # Undo paths
+  undo:
+    enable_return_to_rest: true
+    detach_before_rest: true
+
+# Week 8: Fault injection for testing
+faults:
+  enabled: false                 # Enable via --faults flag
+  seed: 42                       # Deterministic seed
+  
+  # Scheduled faults (used in scenarios)
+  schedule: []                   # Populated by scenario scripts
+
+# Week 9: Demo and logging configuration
+demo:
+  log_dir: "logs"                    # Directory for session logs
+  save_metrics: true                 # Auto-save metrics at end
+  show_overlay: true                 # Show UI overlay
+  print_narrative: true              # Print narrative to console
+  auto_advance_narrative: false      # Auto-advance in scripted mode
+  
+  # Session management
+  session_id_format: "arm_%Y%m%d_%H%M%S"  # strftime format
+  
+  # Logging verbosity
+  log_events: true                   # Enable JSONL event logging
+  log_snapshots: false               # Log full snapshots (verbose)
+  
+  # Metrics export
+  export_json: true                  # Export metrics.json
+  export_markdown: true              # Export report.md
+  
+  # Performance tracking
+  track_fps: true
+  track_latency: false               # Reserved for future

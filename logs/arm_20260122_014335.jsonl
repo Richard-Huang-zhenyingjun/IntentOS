@@ -1,0 +1,2 @@
+{"event_id": 0, "timestamp": 1769064215.310868, "event_type": "session_started", "session_id": "arm_20260122_014335"}
+{"event_id": 1, "timestamp": 1769064294.6050189, "event_type": "session_ended", "session_id": "arm_20260122_014335", "frame_count": 2167}

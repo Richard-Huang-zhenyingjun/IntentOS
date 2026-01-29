@@ -1,0 +1,87 @@
+# Intent Interface Prototype - Configuration
+# Week 9 Visual Demo
+
+seed: 42
+
+# State machine settings
+state_machine:
+  confidence_threshold: 0.7
+  scope_timeout_seconds: 5.0
+  adaptive_dwell_enabled: true
+  baseline_dwell_ms: 500
+  min_dwell_ms: 200
+  max_dwell_ms: 1000
+
+# Confidence tracker settings
+confidence_tracker:
+  consistency_threshold: 0.6
+  window_seconds: 1.5
+  ema_alpha: 0.3
+  decay_rate: 0.1
+
+# Multi-object settings (Week 6)
+multi_object:
+  enabled: true
+  max_candidates: 10
+  ambiguity_threshold: 0.2
+  focus_commit_cooldown_ms: 500
+
+# Multi-user settings (Week 7)
+multi_user:
+  enabled: true
+  num_users: 2
+  min_attribution_confidence: 0.85
+  allow_shared_objects: false
+  lock_ttl_seconds: 2.0
+
+# Fault injection (for stress testing, Week 8)
+fault_injection:
+  enabled: false
+  seed: 42
+  identity_dropout_rate: 0.01
+  misattribution_rate: 0.01
+  lock_loss_rate: 0.01
+  oscillation_burst_rate: 0.01
+  confidence_collapse_rate: 0.01
+
+# Recovery settings (Week 8)
+recovery:
+  enabled: true
+  min_attribution_confidence: 0.85
+  pause_on_identity_drop: true
+  pause_on_lock_loss: true
+  pause_on_ambiguity_in_confirming: true
+  pause_on_oscillation: true
+  pause_on_confidence_collapse: true
+
+# Undo settings (Week 8)
+undo:
+  enabled: true
+  undo_window_seconds: 10.0
+
+# Simulator settings
+simulator:
+  noise_level: 0.3
+  select_rate: 0.1
+  confirm_rate: 0.05
+
+# Narrative logging (Week 9)
+narrative:
+  enabled: true
+  log_dir: data/narratives
+
+# UI settings (Week 9 Final Polish)
+ui:
+  window_width: 1200
+  window_height: 600
+  panel_width: 400
+
+# Week 1: Camera integration
+camera_enabled: true
+vision_config: "configs/vision.yaml"
+
+# Logging configuration
+logging:
+  enabled: true
+  log_file: null  # null = auto-generate with timestamp
+

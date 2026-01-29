@@ -1,0 +1,189 @@
+# Week 1: Camera + Object Detection + Focus Selection
+
+camera:
+  device_index: 0  # 0 = default webcam
+  target_fps: 30
+  width: 640
+  height: 480
+  auto_exposure: true
+  mock_mode: false  # true for deterministic testing
+
+detection:
+  mode: "mock"  # Options: "mock", "contour", "yolo"
+  min_confidence: 0.5
+  min_area_pixels: 1000
+  max_detections: 10
+  
+  # Mock detector settings
+  mock:
+    num_objects_min: 1
+    num_objects_max: 3
+    object_labels: ["lamp", "cup", "phone", "door"]
+    confidence_range: [0.6, 0.95]
+    jitter_pixels: 5  # simulate detection noise
+  
+  # Contour detector specific
+  threshold_value: 127
+  blur_kernel: 5
+  
+  # YOLO detector specific (Week 2+)
+  model_path: ""
+  class_names: []
+
+# Week 2: Object Tracking + Stability
+tracking:
+  # Track matching
+  iou_match_threshold: 0.3  # Intersection over Union for re-association
+  label_match_required: true  # Must match label to associate
+  max_bbox_shift_pixels: 100  # Max movement per frame (anti-jitter)
+  
+  # Track lifecycle
+  track_max_age_frames: 10  # Delete track after N missed frames
+  track_min_hits: 3  # Must be detected N times to be "confirmed"
+  track_new_confidence_threshold: 0.6  # New tracks need higher confidence
+  
+  # Confidence smoothing
+  confidence_ema_alpha: 0.4  # 40% new, 60% old
+  
+  # History
+  track_history_length: 30  # Frames of bbox history (for velocity estimation)
+
+focus_selection:  # EXTENDED from Week 1
+  min_confidence: 0.5
+  min_score_margin: 0.2  # 20% score difference required
+  center_reticle_radius: 50  # pixels
+  
+  # Ambiguity detection (new)
+  ambiguity_margin: 0.15  # Score difference threshold (15%)
+  ambiguity_absolute_threshold: 0.05  # Ignore if both scores < 0.05
+  
+  # Scoring weights (enhanced)
+  weight_center: 0.5
+  weight_confidence: 0.3
+  weight_size: 0.1
+  weight_temporal_stability: 0.1  # Prefer objects seen longer
+  
+  # Center region definition
+  center_region_width_fraction: 0.3  # 30% of frame width
+  center_region_height_fraction: 0.3  # 30% of frame height
+
+scope_stability:
+  # Stability requirements
+  scope_stable_frames: 5  # Must see same track N consecutive frames
+  scope_unstable_reset_threshold: 2  # Reset if different for N frames
+  
+  # Timeout
+  max_stability_wait_seconds: 3.0  # Give up if unstable too long
+
+focus_commitment:
+  # Switch resistance
+  commitment_frames: 8  # Resist switching for N frames after stable
+  commitment_score_advantage: 0.25  # New track must win by this much
+  commitment_timeout_seconds: 5.0  # Release commitment after timeout
+  
+  # Oscillation detection
+  oscillation_window_seconds: 3.0
+  oscillation_max_switches: 3  # More than N switches → suppress both
+  oscillation_cooldown_seconds: 2.0
+
+camera_scope_controller:
+  min_scope_confidence: 0.6  # Higher than detection threshold
+
+camera_overlay:
+  show_reticle: true
+  show_all_detections: false  # true for debugging
+  reticle_radius: 50
+  bbox_thickness: 3
+
+# Week 3: Affordances
+affordances:
+  enabled: true
+  max_affordance_options: 3
+  min_category_confidence: 0.5
+  min_affordance_confidence: 0.6
+  
+  # Category classifier
+  category_classifier:
+    min_category_confidence: 0.5
+    high_confidence_threshold: 0.9
+    
+    # Custom keyword mappings (optional)
+    category_keywords:
+      lamp: ['lamp', 'light', 'bulb', 'lantern']
+      door: ['door', 'gate', 'entrance']
+      cup: ['cup', 'mug', 'glass']
+      phone: ['phone', 'mobile', 'smartphone']
+  
+  # Affordance registry
+  affordance_registry:
+    max_affordance_options: 3
+
+# Week 7: Multi-Object Robustness
+multi_object:
+  enabled: true
+  
+  # Candidate management
+  max_candidates: 10  # Track up to 10 objects internally
+  max_display_candidates: 1  # Show at most 1 to user
+  
+  # Ranking weights (must sum to 1.0)
+  ranking:
+    weight_center: 0.5  # Proximity to center
+    weight_confidence: 0.3  # Detection confidence
+    weight_recency: 0.1  # Recently focused
+    weight_size: 0.05  # Object size
+    weight_stability: 0.05  # Track stability
+  
+  # Ambiguity detection
+  ambiguity:
+    min_rank_margin: 0.2  # 20% score difference required
+    absolute_threshold: 0.05  # Ignore if both scores < 0.05
+    grace_period_seconds: 0.5  # Brief overlap OK
+  
+  # Oscillation detection
+  oscillation:
+    window_seconds: 3.0  # Look back this far
+    switch_threshold: 3  # More than 3 switches → oscillating
+    suppress_duration_seconds: 2.0  # Suppress both objects
+    cooldown_frames: 10  # Frames before re-consideration
+  
+  # Focus commitment (enhanced)
+  commitment:
+    frames_required: 8  # Consecutive frames before switch
+    score_advantage_required: 0.25  # New object must win decisively
+    timeout_seconds: 5.0  # Release commitment after timeout
+
+# Week 7: Failure Recovery
+robustness:
+  enabled: true
+  
+  # Object loss detection
+  object_loss:
+    pause_on_loss: true
+    loss_grace_frames: 3  # Object can disappear briefly
+  
+  # Hand loss detection
+  hand_loss:
+    pause_during_confirm: true
+    loss_grace_frames: 2  # Hand can disappear briefly
+  
+  # Ambiguity during confirmation
+  ambiguity_during_confirm:
+    pause_on_ambiguity: true  # Pause if ambiguity appears during confirm/execute
+  
+  # Recovery behavior
+  recovery:
+    require_rescope_after_pause: true  # Must re-establish scope
+    clear_confirmation_on_pause: true  # Must re-confirm
+
+# Week 7: Video Session Logging
+video_session:
+  enabled: true
+  output_dir: "./logs/video_sessions"
+  
+  # Logging strategy
+  log_every_frame: false  # Log only state changes (efficient)
+  log_candidate_scores: true  # Include detailed candidate scoring
+  log_pause_triggers: true  # Log all pause events
+  log_oscillation_events: true  # Log oscillation detection
+
