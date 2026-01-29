@@ -352,7 +352,7 @@ def main():
                         size=1.5,
                         lifetime=0,
                         replace_id=key_echo_id
-                    )
+                        )
                     break  # Only show first triggered key per frame
             
             # Clear key echo after duration

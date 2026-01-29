@@ -1,0 +1,51 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.5, pytest-8.3.4, pluggy-1.5.0 -- /opt/anaconda3/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/richardhuang/Intent Interface Prototype 
+plugins: colcon-core-0.20.0, repeat-0.9.4, rerunfailures-16.0.1, anyio-4.7.0, cov-7.0.0
+collecting ... collected 375 items / 4 errors
+
+==================================== ERRORS ====================================
+________________ ERROR collecting tests/test_fault_injection.py ________________
+ImportError while importing test module '/Users/richardhuang/Intent Interface Prototype /tests/test_fault_injection.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/anaconda3/lib/python3.13/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_fault_injection.py:13: in <module>
+    from sim.fault_injection import (
+E   ImportError: cannot import name 'InjectedFault' from 'sim.fault_injection' (/Users/richardhuang/Intent Interface Prototype /tests/../src/sim/fault_injection.py)
+_____________ ERROR collecting tests/test_week8_fault_injection.py _____________
+ImportError while importing test module '/Users/richardhuang/Intent Interface Prototype /tests/test_week8_fault_injection.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/anaconda3/lib/python3.13/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_week8_fault_injection.py:8: in <module>
+    from src.robotics.recovery import FaultInjector, FaultType, ScheduledFault
+E   ModuleNotFoundError: No module named 'src'
+__________ ERROR collecting tests/test_week8_recovery_integration.py ___________
+ImportError while importing test module '/Users/richardhuang/Intent Interface Prototype /tests/test_week8_recovery_integration.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/anaconda3/lib/python3.13/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_week8_recovery_integration.py:8: in <module>
+    from robotics.recovery import (
+E   ImportError: cannot import name 'RecoveryState' from 'robotics.recovery' (/Users/richardhuang/Intent Interface Prototype /tests/../src/robotics/recovery/__init__.py). Did you mean: 'RecoveryPlan'?
+_______________ ERROR collecting tests/test_week8_undo_cancel.py _______________
+ImportError while importing test module '/Users/richardhuang/Intent Interface Prototype /tests/test_week8_undo_cancel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/anaconda3/lib/python3.13/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_week8_undo_cancel.py:8: in <module>
+    from src.robotics.recovery import UndoController, TrustMetricsTracker, PauseTrigger
+E   ModuleNotFoundError: No module named 'src'
+=========================== short test summary info ============================
+ERROR tests/test_fault_injection.py
+ERROR tests/test_week8_fault_injection.py
+ERROR tests/test_week8_recovery_integration.py
+ERROR tests/test_week8_undo_cancel.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+============================== 4 errors in 1.23s ===============================
