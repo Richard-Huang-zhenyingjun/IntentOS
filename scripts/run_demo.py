@@ -25,6 +25,7 @@ from src.core.diag import print_startup_banner
 from src.core.system_factory import build_system
 from src.core.schema import UISnapshot
 from src.input.keyboard_input import KeyboardInput
+from src.input.source_keyboard import KeyboardSource
 from src.ui.overlay import DebugOverlay
 import pybullet as p
 import time
@@ -56,6 +57,9 @@ def main():
     
     # Week 3: Build system (all wiring happens here)
     orch = build_system(config)
+    keyboard_source = None
+    if hasattr(orch, "decision_pipeline") and hasattr(orch.decision_pipeline, "router"):
+        keyboard_source = orch.decision_pipeline.router.get_source('keyboard')
     
     # Warning: Focus PyBullet window
     if not args.headless:
@@ -138,13 +142,20 @@ def main():
                 if frame % 300 == 0:  # Every 5 seconds at 60fps
                     print(f"[KEYBOARD DEBUG] No keys detected (frame {frame})")
             
-            # Pass keys to KeyboardInput (if it's a KeyboardInput instance)
-            # This prevents KeyboardInput from reading again and clearing buffer
-            if isinstance(decision_source, KeyboardInput):
-                # Temporarily store keys for KeyboardInput to use
-                decision_source._cached_keys = keys
+            # Wire PyBullet key events into the pipeline keyboard source.
+            # Keep legacy KeyboardInput path intact, but drive KeyboardSource for active demo.
+            if isinstance(keyboard_source, KeyboardSource):
+                c_pressed = (
+                    (ord('c') in keys and keys[ord('c')] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))
+                    or (ord('C') in keys and keys[ord('C')] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))
+                )
+                x_pressed = (
+                    (ord('x') in keys and keys[ord('x')] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))
+                    or (ord('X') in keys and keys[ord('X')] & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))
+                )
+                keyboard_source.set_key_state(confirm=bool(c_pressed), cancel=bool(x_pressed))
             
-            snapshot = orch.step()  # KeyboardInput will use cached keys
+            snapshot = orch.step()
             
             # Handle L - Lock target (case-insensitive)
             print(f"[DEBUG L] Checking L key condition...")
@@ -210,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

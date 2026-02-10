@@ -45,6 +45,10 @@ class DecisionRouter:
         self._sources[name] = source
         logger.info(f"[ROUTER] Registered source '{name}' (type={source.source_type().value})")
     
+    def get_source(self, name: str) -> Optional[DecisionSourceBase]:
+        """Get a registered source by name, or None if missing."""
+        return self._sources.get(name)
+    
     def read_all(self) -> tuple:
         """
         Read from all sources and apply routing policy.
@@ -206,5 +210,4 @@ class DecisionRouter:
             'registered_sources': list(self._sources.keys()),
             'mode': self.policy.mode.value,
         }
-
 
