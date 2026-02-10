@@ -1,0 +1,15 @@
+{
+  "duration_sec": 10.0,
+  "sfreq": 512.0,
+  "n_samples": 5120,
+  "blink_times_sec": [
+    2.0,
+    5.0,
+    8.0
+  ],
+  "dropout_range_sec": [
+    6.5,
+    7.0
+  ],
+  "expected_min_confirms": 2
+}

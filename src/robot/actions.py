@@ -7,11 +7,17 @@ import numpy as np
 
 
 class ActionType(str, Enum):
-    """Available robot actions."""
+    """High-level action types"""
+    IDLE = "idle"
+    
+    # Week 0 actions
     MOVE_UP = "move_up"        # Raise arm to safe height
     REACH = "reach"            # Move to object
     GRASP = "grasp"            # Attach object
     PLACE = "place"            # Release object at target
+    
+    # NEW Week 1 action
+    CLEAN_TABLE = "clean_table"
 
 
 @dataclass

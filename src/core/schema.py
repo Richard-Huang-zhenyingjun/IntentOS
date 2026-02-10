@@ -2,8 +2,18 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, TYPE_CHECKING
 import time
+
+# Forward references for Week 1 types
+if TYPE_CHECKING:
+    from src.intelligence.scene_summary import SceneSummary
+    from src.execution.primitive_executor import ExecutorStatus
+    from src.robot.simulator import ArmState, ObjectState
+
+# Week 1 imports
+from src.intelligence.scene_summary import SceneSummary
+from src.execution.primitive_executor import ExecutorStatus
 
 
 class ArmUIState(str, Enum):
@@ -29,6 +39,8 @@ class ArmActionType(str, Enum):
     REACH = "reach"
     GRASP = "grasp"
     PLACE = "place"
+    CLEAN_TABLE = "clean_table"  # Week 1: Clean messy table
+    IDLE = "idle"                # Week 1: No action needed
     
     def __str__(self) -> str:
         """String representation (just the value)."""
@@ -85,7 +97,7 @@ class ArmDecision:
 
 @dataclass
 class UISnapshot:
-    """Complete UI state (read-only)."""
+    """Complete UI state (read-only) - Enhanced for Week 1 with scene understanding."""
     # State
     state: ArmUIState
     frame_count: int
@@ -109,4 +121,24 @@ class UISnapshot:
     
     # Metadata
     what_happened: str  # Human-readable event
+    
+    # NEW Week 1 fields
+    scene_summary: Optional['SceneSummary'] = None
+    executor_status: Optional['ExecutorStatus'] = None
+    primitive_index: int = 0
+    
+    # Week 1: Arm and object states (for scene understanding)
+    arm_state: Optional['ArmState'] = None
+    objects: Optional[List['ObjectState']] = None
+    current_proposal: Optional[ArmProposal] = None  # Alias for proposal, Week 1 naming
+    
+    # Week 4: Proposer statistics
+    proposer_stats: Optional[dict] = None
+    
+    # Week 7: Authorization, Trust, Autonomy
+    autonomy_level: Optional[str] = None
+    task_trust: Optional[float] = None
+    auth_token_id: Optional[str] = None
+    awaiting_reauth: bool = False
+    awaiting_object_confirm: bool = False
 

@@ -1,0 +1,124 @@
+import pybullet as p
+import pybullet_data
+import numpy as np
+from src.worlds.world_artifacts import WorldArtifacts
+from src.robot.simulator import RobotSimulator as Simulator
+
+
+def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
+    """
+    Build a deterministic messy table scene.
+    
+    Returns:
+        WorldArtifacts with IDs of everything created
+    """
+    world_cfg = config['world']['messy_table']
+    seed = world_cfg['seed']
+    n_objects = world_cfg['n_objects']
+    
+    # Set random seed for reproducibility
+    np.random.seed(seed)
+    
+    # Load table (simple box for Week 1)
+    table_half_extents = [0.4, 0.3, 0.3]  # 80cm x 60cm x 60cm
+    table_pos = [0.0, 0.0, 0.3]  # Center at origin, top at z=0.6
+    
+    table_collision = p.createCollisionShape(
+        p.GEOM_BOX,
+        halfExtents=table_half_extents
+    )
+    table_visual = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=table_half_extents,
+        rgbaColor=[0.6, 0.4, 0.2, 1.0]  # Brown
+    )
+    table_id = p.createMultiBody(
+        baseMass=0,  # Static
+        baseCollisionShapeIndex=table_collision,
+        baseVisualShapeIndex=table_visual,
+        basePosition=table_pos
+    )
+    
+    print(f"[WORLD] Created table at {table_pos}, top at z=0.6")
+    
+    # Spawn objects on table
+    bounds = world_cfg['table_bounds_xy']
+    x_min, x_max, y_min, y_max = bounds
+    spawn_z = world_cfg['spawn_height_z']
+    
+    object_ids = []
+    
+    for i in range(n_objects):
+        # Random position on table (with rejection sampling)
+        attempts = 0
+        while attempts < 10:
+            x = np.random.uniform(x_min, x_max)
+            y = np.random.uniform(y_min, y_max)
+            
+            # Check not too close to existing objects (simple)
+            too_close = False
+            for obj_id in object_ids:
+                obj_pos = p.getBasePositionAndOrientation(obj_id)[0]
+                dist = np.linalg.norm(np.array([x, y]) - np.array(obj_pos[:2]))
+                if dist < 0.08:  # 8cm minimum spacing
+                    too_close = True
+                    break
+            
+            if not too_close:
+                break
+            attempts += 1
+        
+        # Create cube
+        size = 0.04  # 4cm cubes
+        collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[size]*3)
+        visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[size]*3,
+            rgbaColor=[np.random.rand(), np.random.rand(), np.random.rand(), 1.0]
+        )
+        obj_id = p.createMultiBody(
+            baseMass=0.05,  # 50g
+            baseCollisionShapeIndex=collision,
+            baseVisualShapeIndex=visual,
+            basePosition=[x, y, spawn_z]
+        )
+        object_ids.append(obj_id)
+    
+    print(f"[WORLD] Spawned {len(object_ids)} objects")
+    
+    # Define bin zone (visual marker)
+    bin_center = tuple(world_cfg['bin_zone_center'])
+    bin_radius = world_cfg['bin_zone_radius']
+    
+    # Draw bin zone marker (debug visualization)
+    _draw_bin_zone_marker(bin_center, bin_radius)
+    
+    return WorldArtifacts(
+        table_id=table_id,
+        object_ids=object_ids,
+        bin_zone_center=bin_center,
+        bin_zone_radius=bin_radius,
+        seed=seed
+    )
+
+
+def _draw_bin_zone_marker(center: tuple, radius: float):
+    """Draw visual circle to mark bin zone"""
+    # Draw circle on table plane using debug lines
+    num_segments = 16
+    for i in range(num_segments):
+        angle1 = 2 * np.pi * i / num_segments
+        angle2 = 2 * np.pi * (i + 1) / num_segments
+        
+        x1 = center[0] + radius * np.cos(angle1)
+        y1 = center[1] + radius * np.sin(angle1)
+        x2 = center[0] + radius * np.cos(angle2)
+        y2 = center[1] + radius * np.sin(angle2)
+        
+        p.addUserDebugLine(
+            [x1, y1, center[2]],
+            [x2, y2, center[2]],
+            lineColorRGB=[0, 1, 0],  # Green
+            lineWidth=2
+        )
+

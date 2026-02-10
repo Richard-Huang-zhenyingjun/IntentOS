@@ -29,13 +29,23 @@ class StateMachine:
     
     def set_target(self, target_id: Optional[int], locked: bool = False):
         """Set current target object."""
+        print(f"[FSM DEBUG] set_target called:")
+        print(f"  target_id: {target_id}")
+        print(f"  locked: {locked}")
+        print(f"  current state BEFORE: {self.state}")
+        
         self.target_id = target_id
         self.target_locked = locked
         
         if target_id is not None and locked:
-            print(f"[FSM] Target locked: {target_id}")
+            print(f"[FSM DEBUG] Target locked, transitioning from {self.state}...")
             if self.state == ArmUIState.IDLE:
                 self._transition_to(ArmUIState.SELECTING)
+                print(f"[FSM DEBUG] Should be SELECTING now: {self.state}")
+            else:
+                print(f"[FSM DEBUG] Not in IDLE state, no transition")
+        
+        print(f"[FSM DEBUG] set_target complete, state is now: {self.state}")
     
     def propose_action(self, action: ArmActionType, reason: str):
         """Propose an action (enters CONFIRMING state)."""
@@ -87,8 +97,10 @@ class StateMachine:
     
     def complete_execution(self):
         """Mark execution complete."""
+        print(f"[FSM] complete_execution called, current state: {self.state}")
         if self.state == ArmUIState.EXECUTING:
             self._transition_to(ArmUIState.DONE)
+            print(f"[FSM] Transitioned to DONE, clearing proposal")
             print(f"[FSM] ✓ Execution complete")
             # Clear proposal after completion
             self.clear_proposal()
@@ -127,7 +139,7 @@ class StateMachine:
     def _transition_to(self, new_state: ArmUIState):
         """Internal state transition."""
         if new_state != self.state:
-            print(f"[FSM] {self.state.value} → {new_state.value}")
+            print(f"[FSM] State transition: {self.state.value} → {new_state.value}")
             self.state = new_state
             self.state_entry_frame = self.current_frame
     
