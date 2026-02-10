@@ -122,3 +122,42 @@ def _draw_bin_zone_marker(center: tuple, radius: float):
             lineWidth=2
         )
 
+
+def reset_world(
+    sim: Simulator,
+    config: dict,
+    previous_artifacts: WorldArtifacts | None = None,
+    seed: int | None = None,
+) -> WorldArtifacts:
+    """
+    Reset world in-place:
+    1) despawn table + objects
+    2) reset arm home pose
+    3) respawn table + objects (same/new seed)
+    """
+    # Remove old world bodies first (if present).
+    if previous_artifacts is not None:
+        for obj_id in previous_artifacts.object_ids:
+            try:
+                p.removeBody(obj_id)
+            except Exception:
+                pass
+        try:
+            p.removeBody(previous_artifacts.table_id)
+        except Exception:
+            pass
+
+    # Remove debug lines from old bin marker.
+    p.removeAllUserDebugItems()
+
+    # Ensure arm returns to known home pose before respawn.
+    if hasattr(sim, "_reset_arm_position"):
+        sim._reset_arm_position()
+
+    # Apply optional seed override for reproducible reset.
+    if seed is not None:
+        config.setdefault("world", {})
+        config["world"].setdefault("messy_table", {})
+        config["world"]["messy_table"]["seed"] = seed
+
+    return build_messy_table(sim, config)

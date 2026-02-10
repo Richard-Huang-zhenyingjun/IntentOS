@@ -43,6 +43,7 @@ from src.core.trust import TrustEngine
 from src.core.autonomy import AutonomyPolicy, AutonomyLevel, AUTONOMY_TO_SCOPE, AUTONOMY_MAX_OBJECTS
 from src.execution.safe_pause import SafePauseHelper
 from src.core.events import EventEmitter, EventType
+from src.core.metrics import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +133,17 @@ class Orchestrator:
         self.global_frame_counter: int = 0
         self.start_time = time.time()
         
+        # Session metrics
+        self.metrics = MetricsCollector(session_id=f"demo_{int(time.time())}")
+        self._status_message: str = ""
+        
         # Current state (Week 3: using interface types)
         self.current_scene: Optional[SceneSummary] = None
         self.current_proposal: Optional[IntentProposal] = None
         
         # Emit autonomy level set event
         if self.events:
+            self._register_metrics_handlers()
             self.events.emit(
                 EventType.AUTONOMY_LEVEL_SET,
                 frame=0,
@@ -180,6 +186,15 @@ class Orchestrator:
         
         # 1. Physics step
         self.sim.step()
+
+        # 1b. Divergence detection: never crash, enter PAUSED and require reset.
+        if self.controller.check_divergence():
+            self._handle_physics_divergence()
+            world = self._read_world_state()
+            self.state_machine.tick()
+            snapshot = self._create_snapshot(world)
+            self.metrics.process_snapshot(snapshot)
+            return snapshot
         
         # 2. Read world state
         world = self._read_world_state()
@@ -196,6 +211,7 @@ class Orchestrator:
         
         # 4. Read decision from pipeline (Week 5)
         decision_frame = self.decision_pipeline.tick(self.global_frame_counter)
+        self._refresh_input_status_message()
         
         # Convert DecisionFrame to ArmDecision for state machine compatibility
         # TODO: Refactor state machine to use DecisionFrame directly
@@ -245,7 +261,52 @@ class Orchestrator:
         self.state_machine.tick()
         
         # 9. Return UI snapshot (enhanced with scene info)
-        return self._create_snapshot(world)
+        snapshot = self._create_snapshot(world)
+        self.metrics.process_snapshot(snapshot)
+        return snapshot
+
+    def _register_metrics_handlers(self):
+        """Wire event stream into session metrics collector."""
+        if self.events is None or not hasattr(self.events, "on"):
+            return
+        for event_type in EventType:
+            self.events.on(event_type, self._on_event_emitted)
+
+    def _on_event_emitted(self, event_type: EventType, data: dict):
+        """Capture structured event payloads for metrics aggregation."""
+        self.metrics.process_event({
+            'event_type': event_type.value if hasattr(event_type, 'value') else str(event_type),
+            'data': data or {},
+        })
+
+    def _refresh_input_status_message(self):
+        """Surface high-signal runtime input/fallback status for overlay."""
+        if self.state_machine.paused and self.state_machine.pause_reason:
+            self._status_message = self.state_machine.pause_reason
+            return
+
+        self._status_message = ""
+        source = None
+        if hasattr(self.decision_pipeline, "router") and hasattr(self.decision_pipeline.router, "get_source"):
+            source = self.decision_pipeline.router.get_source("eeg")
+
+        if source is not None:
+            try:
+                eeg_unavailable = not source.is_available()
+            except Exception:
+                eeg_unavailable = True
+            if eeg_unavailable:
+                self._status_message = "INPUT: Keyboard only (EEG device unavailable)"
+
+    def _handle_physics_divergence(self):
+        """Pause safely if physics diverges; never allow crash-through execution."""
+        pause_reason = "Physics divergence detected — reset required (R)"
+        if not self.state_machine.paused:
+            self.state_machine.trigger_pause(pause_reason)
+        self._status_message = pause_reason
+
+        state_dump = self.controller.divergence_state_dump()
+        logger.error("[ORCH] Physics divergence detected. State dump: %s", state_dump)
     
     def _read_world_state(self) -> WorldState:
         """Read current world state from simulator."""
@@ -681,7 +742,7 @@ class Orchestrator:
             false_executions=self.trust_metrics.false_executions,
             paused=self.state_machine.paused,
             pause_reason=self.state_machine.pause_reason,
-            what_happened="",  # Can be populated if needed
+            what_happened=self._status_message,
             # NEW Week 1 fields
             scene_summary=self.current_scene,
             executor_status=self.executor.status if self.executor else None,

@@ -28,6 +28,7 @@ from src.input.source_eeg_mock import MockEEGSource
 from src.input.eeg.eeg_source import EEGDecisionSource
 from typing import Optional
 import logging
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ try:
     from src.core.events import EventEmitter
 except ImportError:
     EventEmitter = None
+
+
+def load_config(config_path: str) -> dict:
+    """Load YAML config from disk."""
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 def build_system(config: dict) -> Orchestrator:
@@ -66,7 +73,8 @@ def build_system(config: dict) -> Orchestrator:
     
     # 5. Event emitter (Week 4: for Gemini logging)
     events_enabled = config.get('logging', {}).get('events_enabled', False)
-    events = EventEmitter(enabled=events_enabled) if EventEmitter else None
+    events_path = config.get('logging', {}).get('events_path')
+    events = EventEmitter(enabled=events_enabled, log_path=events_path) if EventEmitter else None
     
     # 6. Proposer registry (with fallback)
     registry = ProposerRegistry()
@@ -193,4 +201,3 @@ def _build_eeg_source(config: dict) -> Optional[EEGDecisionSource]:
         return None
     
     return EEGDecisionSource(device=device, config=config)
-

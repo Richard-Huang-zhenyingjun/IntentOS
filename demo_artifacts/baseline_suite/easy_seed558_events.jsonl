@@ -1,0 +1,35 @@
+{"event_type": "autonomy_level_set", "timestamp": 1770704846.1631958, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "autonomy_level_set", "timestamp": 1770704886.670837, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "decision_received", "timestamp": 1770704886.8963609, "data": {"intent": "confirm", "source": "keyboard", "quality": 1.0, "filter_action": "passed", "filter_reason": "", "raw_intents": {"keyboard": "confirm"}, "frame": 12}}
+{"event_type": "auth_token_issued", "timestamp": 1770704886.896609, "data": {"token_id": "auth_c381695b046f", "scope": "task_session", "source": "keyboard", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}
+{"event_type": "trust_updated", "timestamp": 1770704886.9185028, "data": {"task_trust": 0.95, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 13}}
+{"event_type": "trust_updated", "timestamp": 1770704886.939987, "data": {"task_trust": 0.8999999999999999, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 14}}
+{"event_type": "trust_updated", "timestamp": 1770704886.961456, "data": {"task_trust": 0.8499999999999999, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 15}}
+{"event_type": "trust_updated", "timestamp": 1770704886.979655, "data": {"task_trust": 0.7999999999999998, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 16}}
+{"event_type": "trust_updated", "timestamp": 1770704887.001089, "data": {"task_trust": 0.7499999999999998, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 17}}
+{"event_type": "trust_updated", "timestamp": 1770704887.020879, "data": {"task_trust": 0.6999999999999997, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 18}}
+{"event_type": "trust_updated", "timestamp": 1770704887.0428789, "data": {"task_trust": 0.6499999999999997, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 19}}
+{"event_type": "trust_updated", "timestamp": 1770704887.064546, "data": {"task_trust": 0.5999999999999996, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 20}}
+{"event_type": "trust_updated", "timestamp": 1770704887.08438, "data": {"task_trust": 0.5499999999999996, "event": "primitive_failed", "token_id": "auth_c381695b046f", "frame": 21}}
+{"event_type": "trust_reauth_triggered", "timestamp": 1770704887.084474, "data": {"reason": "trust_below_threshold (0.550 < 0.55)", "trust": 0.5499999999999996, "token_id": "auth_c381695b046f", "frame": 21}}
+{"event_type": "safe_pause_started", "timestamp": 1770704887.0845308, "data": {"n_primitives": 1, "is_grasping": false, "frame": 21}}
+{"event_type": "autonomy_level_set", "timestamp": 1770704945.908759, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "decision_received", "timestamp": 1770704946.135217, "data": {"intent": "confirm", "source": "keyboard", "quality": 1.0, "filter_action": "passed", "filter_reason": "", "raw_intents": {"keyboard": "confirm"}, "frame": 12}}
+{"event_type": "auth_token_issued", "timestamp": 1770704946.135371, "data": {"token_id": "auth_93aefb94f82b", "scope": "task_session", "source": "keyboard", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}
+{"event_type": "trust_updated", "timestamp": 1770704946.157141, "data": {"task_trust": 0.95, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 13}}
+{"event_type": "trust_updated", "timestamp": 1770704946.176547, "data": {"task_trust": 0.8999999999999999, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 14}}
+{"event_type": "trust_updated", "timestamp": 1770704946.198215, "data": {"task_trust": 0.8499999999999999, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 15}}
+{"event_type": "trust_updated", "timestamp": 1770704946.218587, "data": {"task_trust": 0.7999999999999998, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 16}}
+{"event_type": "trust_updated", "timestamp": 1770704946.240103, "data": {"task_trust": 0.7499999999999998, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 17}}
+{"event_type": "trust_updated", "timestamp": 1770704946.261649, "data": {"task_trust": 0.6999999999999997, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 18}}
+{"event_type": "trust_updated", "timestamp": 1770704946.28305, "data": {"task_trust": 0.6499999999999997, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 19}}
+{"event_type": "trust_updated", "timestamp": 1770704946.3024378, "data": {"task_trust": 0.5999999999999996, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 20}}
+{"event_type": "trust_updated", "timestamp": 1770704946.321704, "data": {"task_trust": 0.5499999999999996, "event": "primitive_failed", "token_id": "auth_93aefb94f82b", "frame": 21}}
+{"event_type": "trust_reauth_triggered", "timestamp": 1770704946.3219578, "data": {"reason": "trust_below_threshold (0.550 < 0.55)", "trust": 0.5499999999999996, "token_id": "auth_93aefb94f82b", "frame": 21}}
+{"event_type": "safe_pause_started", "timestamp": 1770704946.322043, "data": {"n_primitives": 1, "is_grasping": false, "frame": 21}}
+{"event_type": "autonomy_level_set", "timestamp": 1770705016.775213, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "decision_received", "timestamp": 1770705017.0103319, "data": {"intent": "confirm", "source": "keyboard", "quality": 1.0, "filter_action": "passed", "filter_reason": "", "raw_intents": {"keyboard": "confirm"}, "frame": 12}}
+{"event_type": "auth_token_issued", "timestamp": 1770705017.010438, "data": {"token_id": "auth_34d708f3cf70", "scope": "task_session", "source": "keyboard", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}
+{"event_type": "autonomy_level_set", "timestamp": 1770705186.940237, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "decision_received", "timestamp": 1770705187.1810749, "data": {"intent": "confirm", "source": "keyboard", "quality": 1.0, "filter_action": "passed", "filter_reason": "", "raw_intents": {"keyboard": "confirm"}, "frame": 12}}
+{"event_type": "auth_token_issued", "timestamp": 1770705187.181199, "data": {"token_id": "auth_4c03339052bd", "scope": "task_session", "source": "keyboard", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}

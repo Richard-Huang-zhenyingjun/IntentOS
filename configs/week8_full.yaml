@@ -1,0 +1,180 @@
+# Intent Interface Configuration
+
+# Debug configuration
+debug:
+  diag_enabled: true
+  diag_log_every_n_frames: 15
+
+# Robot parameters
+robot:
+  max_force: 400.0
+  max_joint_vel_rad_s: 2.5
+  position_gain: 0.2
+  velocity_gain: 1.0
+  tolerance_rad: 0.02
+  settle_threshold: 0.01
+  settle_frames_required: 10
+  
+  # Thresholds
+  min_ee_height: 0.15
+  reach_distance: 0.15
+  grasp_distance: 0.10
+  
+  # Place location
+  place_position: [0.0, 0.0, 0.65]
+
+# Cube
+cube_urdf: "cube_small.urdf"
+
+# Week 5-6: Decision pipeline
+input:
+  mode: "KEYBOARD_ONLY"           # Default safe mode
+  sources_enabled: ["keyboard"]    # Add "eeg" to enable
+  debounce_frames: 8
+  confirm_hold_frames: 2
+  min_quality: 0.70
+  dual:
+    sources: ["keyboard", "eeg"]
+    window_ms: 900
+
+keyboard:
+  confirm_key: "c"
+  cancel_key: "x"
+  lock_key: "l"
+
+eeg_mock:
+  enabled: false
+  confirm_probability: 0.02
+  quality_mean: 0.5
+  quality_std: 0.15
+  artifact_probability: 0.05
+  seed: null
+
+# Recovery
+recovery:
+  enabled: true
+
+# UI
+ui:
+  show_overlay: true
+
+# World configuration
+world:
+  messy_table:
+    seed: 42
+    n_objects: 6
+    table_bounds_xy: [-0.35, 0.35, -0.25, 0.25]
+    spawn_height_z: 0.65
+    bin_zone_center: [0.4, 0.0, 0.75]
+    bin_zone_radius: 0.12
+
+# Scene understanding
+scene_understanding:
+  messy_detection:
+    min_objects: 3
+    spread_threshold: 0.18
+    z_on_table_eps: 0.04
+
+# Planning
+planning:
+  clean_table:
+    approach_height: 0.10
+    grasp_height_offset: 0.02
+    bin_hover_height: 0.12
+    bin_drop_height_offset: 0.03
+    workspace_bounds: [-0.6, 0.6, -0.6, 0.6, 0.0, 1.0]
+    safe_home_xyz: [0.3, 0.0, 0.8]
+
+# Proposer configuration
+proposer:
+  active: "heuristic"  # "heuristic" | "gemini" (Week 4+)
+  fallback: "heuristic"
+
+# Week 4: Gemini integration
+gemini:
+  enabled: false                    # Set true when API key available
+  use_fake_client: false            # Set true for testing without API
+  model: "gemini-2.0-flash"
+  api_key: null                     # Or set GEMINI_API_KEY env var
+  timeout_ms: 3000
+  max_output_chars: 6000
+  temperature: 0.0
+  cache:
+    min_interval_sec: 2.0
+    max_entries: 50
+  logging:
+    save_raw_response: true
+    truncate_chars: 2000
+
+proposers:
+  blocked_states: ["executing"]     # No external proposers during execution (use lowercase state names)
+
+# Week 6: Real EEG
+eeg:
+  enabled: false
+  backend: "brainlink"             # "brainlink" | "replay"
+  replay_file: "tests/fixtures/eeg/synthetic_session.csv"
+  replay_realtime: false
+  port: "auto"
+  baud_rate: 57600
+  channel_count: 1
+  expected_sfreq: 512
+  window_sec: 1.0
+  step_sec: 0.25
+  max_compute_ms: 15
+  dropout_max_frac: 0.10
+  circuit_breaker:
+    error_threshold: 10
+    cooldown_sec: 5.0
+    window_sec: 10.0
+
+mne:
+  notch_hz: 60
+  bandpass_hz: [1.0, 40.0]
+  resample_hz: null
+
+eeg_quality:
+  dropout_threshold: 0.10
+  dropout_penalty: 0.5
+  clipping_threshold: 0.01
+  clipping_penalty: 0.3
+  amplitude_low: 1.0
+  amplitude_high: 500.0
+  amplitude_penalty: 0.3
+  noise_ratio_threshold: 0.3
+  noise_penalty: 0.2
+
+decoder:
+  type: "blink_spike"
+  spike_z_thresh: 3.5
+  min_spikes_for_confirm: 2
+  min_interval_ms: 1200
+  confidence_scale: 1.0
+  beta_threshold: 0.3
+  sustain_windows: 3
+
+# Week 7: Shared autonomy + trust
+autonomy:
+  level: "A2_TASK_CONFIRM"
+  allow_auto_decrease: true
+  decrease_on:
+    trust_below: 0.55
+    consecutive_failures: 2
+
+trust:
+  init_task_trust: 1.0
+  recovery_per_success: 0.03
+  max_recovery_trust: 0.90
+  penalties:
+    primitive_timeout: "moderate"
+    grasp_retry: "minor"
+    grasp_fail: "severe"
+    unreachable_skip: "moderate"
+    object_timeout: "severe"
+    ik_fail: "moderate"
+    out_of_bounds: "moderate"
+    object_missing: "minor"
+  reauth:
+    enable: true
+    task_trust_below: 0.55
+    consecutive_failures: 2

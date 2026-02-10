@@ -5,8 +5,12 @@ Week 2-3: Basic event types
 Week 4: Gemini-specific events
 """
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 import logging
+import json
+import sys
+import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +62,20 @@ class EventEmitter:
     Week 5+: May add JSONL file logging, metrics aggregation, etc.
     """
     
-    def __init__(self, enabled: bool = True):
+    def __init__(self, enabled: bool = True, log_path: Optional[str] = None):
         self.enabled = enabled
-        self._handlers: Dict[EventType, list] = {}
+        self._handlers: Dict[EventType, list[Callable[[EventType, Dict[str, Any]], None]]] = {}
+        self.log_path = log_path
+        self._file = None
+
+        if self.enabled and self.log_path:
+            try:
+                path = Path(self.log_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._file = open(path, "a", encoding="utf-8")
+            except OSError as e:
+                print(f"WARNING: Failed to open event log: {e}", file=sys.stderr)
+                self._file = None
     
     def emit(
         self,
@@ -86,6 +101,19 @@ class EventEmitter:
         # Log to console
         logger.info(f"[EVENT] {event_type.value}: {data}")
         
+        # Persist JSONL event (best effort)
+        event_record = {
+            "event_type": event_type.value,
+            "timestamp": time.time(),
+            "data": data,
+        }
+        if self._file is not None:
+            try:
+                self._file.write(json.dumps(event_record) + "\n")
+                self._file.flush()
+            except IOError as e:
+                print(f"WARNING: Failed to write event log: {e}", file=sys.stderr)
+
         # Call registered handlers
         if event_type in self._handlers:
             for handler in self._handlers[event_type]:
@@ -94,13 +122,13 @@ class EventEmitter:
                 except Exception as e:
                     logger.warning(f"[EVENT] Handler error: {e}")
     
-    def on(self, event_type: EventType, handler: callable):
+    def on(self, event_type: EventType, handler: Callable[[EventType, Dict[str, Any]], None]):
         """Register an event handler"""
         if event_type not in self._handlers:
             self._handlers[event_type] = []
         self._handlers[event_type].append(handler)
     
-    def off(self, event_type: EventType, handler: callable):
+    def off(self, event_type: EventType, handler: Callable[[EventType, Dict[str, Any]], None]):
         """Unregister an event handler"""
         if event_type in self._handlers:
             try:
@@ -108,3 +136,18 @@ class EventEmitter:
             except ValueError:
                 pass
 
+    def flush(self):
+        if self._file is not None:
+            try:
+                self._file.flush()
+            except IOError as e:
+                print(f"WARNING: Failed to flush event log: {e}", file=sys.stderr)
+
+    def close(self):
+        if self._file is not None:
+            try:
+                self._file.close()
+            except OSError as e:
+                print(f"WARNING: Failed to close event log: {e}", file=sys.stderr)
+            finally:
+                self._file = None

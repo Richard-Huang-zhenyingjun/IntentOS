@@ -1,7 +1,6 @@
-from typing import List, Optional
+from typing import List
 from enum import Enum
-import numpy as np
-from src.planning.primitive import Primitive, PrimitiveType
+from src.interfaces.primitive import Primitive
 from src.robot.world_state import WorldState
 from src.robot.controller import RobotController
 from src.robot.grasp import GraspController
@@ -28,6 +27,12 @@ class PrimitiveExecutor:
         self.plan_index: int = 0
         self.active_primitive_started: bool = False
         self.status: ExecutorStatus = ExecutorStatus.IDLE
+
+    @staticmethod
+    def _primitive_kind(primitive: Primitive) -> str:
+        """Return normalized primitive kind to tolerate legacy enum classes."""
+        primitive_type = primitive.type
+        return getattr(primitive_type, "value", str(primitive_type))
     
     def start_plan(self, plan: List[Primitive]):
         """Begin executing a new plan"""
@@ -90,7 +95,9 @@ class PrimitiveExecutor:
         Returns:
             True if started successfully, False if failed
         """
-        if primitive.type in [PrimitiveType.REACH, PrimitiveType.MOVE_TO]:
+        kind = self._primitive_kind(primitive)
+
+        if kind in ("reach", "move_to"):
             # Use controller from Week 0
             if primitive.target_xyz is None:
                 return False
@@ -98,7 +105,7 @@ class PrimitiveExecutor:
             self.controller.move_to_position(primitive.target_xyz)
             return True
         
-        elif primitive.type == PrimitiveType.GRASP:
+        elif kind == "grasp":
             # Use grasp controller
             if primitive.object_id is None:
                 return False
@@ -106,7 +113,7 @@ class PrimitiveExecutor:
             self.grasp.attach(primitive.object_id)
             return True
         
-        elif primitive.type == PrimitiveType.RELEASE:
+        elif kind == "release":
             # Release grasp
             if primitive.object_id is None:
                 return False
@@ -125,18 +132,20 @@ class PrimitiveExecutor:
         Returns:
             True if complete, False if still running
         """
-        if primitive.type in [PrimitiveType.REACH, PrimitiveType.MOVE_TO]:
+        kind = self._primitive_kind(primitive)
+
+        if kind in ("reach", "move_to"):
             # Check controller convergence (Week 0 pattern)
             if world.arm is None:
                 return False
             return self.controller.update(world.arm)
         
-        elif primitive.type == PrimitiveType.GRASP:
+        elif kind == "grasp":
             # Check if grasp constraint exists
             # For Week 1, assume grasp completes in 1 frame
             return True
         
-        elif primitive.type == PrimitiveType.RELEASE:
+        elif kind == "release":
             # Release completes immediately
             return True
         

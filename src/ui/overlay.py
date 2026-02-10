@@ -2,10 +2,68 @@
 
 import pybullet as p
 from typing import List
+from types import SimpleNamespace
 from src.core.schema import UISnapshot
 
 # Week 1 imports
 from src.execution.primitive_executor import ExecutorStatus
+
+
+class OverlayBuilder:
+    """Build human-readable overlay text blocks from current system state."""
+
+    def __init__(self, max_line_len: int = 40):
+        self.max_line_len = max_line_len
+
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.max_line_len:
+            return text
+        return text[: self.max_line_len - 3] + "..."
+
+    def build(
+        self,
+        state,
+        scene_summary=None,
+        proposal=None,
+        trust: float | None = None,
+        autonomy_level: str | None = None,
+        last_event: str | None = None,
+    ) -> List[str]:
+        lines: List[str] = []
+
+        lines.append(self._truncate(f"SYSTEM STATE: {state.value if hasattr(state, 'value') else state}"))
+        if autonomy_level is not None:
+            lines.append(self._truncate(f"Autonomy: {autonomy_level}"))
+        if trust is not None:
+            lines.append(self._truncate(f"Trust: {trust:.2f} / 1.00"))
+
+        lines.append("SCENE")
+        if scene_summary is not None:
+            objects_on_table = getattr(scene_summary, "objects_on_table", []) or []
+            bin_zone_center = getattr(scene_summary, "bin_zone_center", None)
+            clutter = getattr(scene_summary, "clutter_score", None)
+            lines.append(self._truncate(f"Objects on table: {len(objects_on_table)}"))
+            lines.append(self._truncate(f"Bin zone: {'defined' if bin_zone_center is not None else 'missing'}"))
+            if clutter is not None:
+                lines.append(self._truncate(f"Clutter score: {clutter:.2f}"))
+
+        lines.append("PROPOSAL")
+        if proposal is not None:
+            source = getattr(proposal, "source", "unknown")
+            action = getattr(getattr(proposal, "action", None), "value", getattr(proposal, "action", "unknown"))
+            confidence = getattr(proposal, "confidence", None)
+            rationale = getattr(proposal, "description", None) or getattr(proposal, "reason", "")
+            lines.append(self._truncate(f"Intent: {action} ({source})"))
+            if confidence is not None:
+                lines.append(self._truncate(f"Confidence: {confidence:.2f}"))
+            if rationale:
+                lines.append(self._truncate(f"Rationale: {rationale}"))
+
+        if last_event:
+            lines.append("LAST EVENT")
+            lines.append(self._truncate(last_event))
+
+        return lines
 
 
 class DebugOverlay:
@@ -13,6 +71,7 @@ class DebugOverlay:
     
     def __init__(self):
         self.text_items: List[int] = []
+        self.builder = OverlayBuilder()
     
     def render(self, snapshot: UISnapshot):
         """Enhanced overlay with scene understanding (Week 1)"""
@@ -24,16 +83,18 @@ class DebugOverlay:
                 pass
         self.text_items.clear()
         
-        # Build status text (matching contract structure)
-        lines = []
-        lines.append("="*60)
-        lines.append("INTENT INTERFACE - Week 1")
-        lines.append("="*60)
+        proposal = snapshot.current_proposal if snapshot.current_proposal else snapshot.proposal
+        lines = self.builder.build(
+            state=snapshot.state,
+            scene_summary=snapshot.scene_summary,
+            proposal=proposal,
+            trust=snapshot.task_trust,
+            autonomy_level=snapshot.autonomy_level,
+            last_event=snapshot.what_happened if hasattr(snapshot, "what_happened") else "",
+        )
+        lines = ["=" * 60, "INTENT INTERFACE - Week 1", "=" * 60] + lines
         
-        # State
-        lines.append(f"State: {snapshot.state.value}")
-        
-        # NEW: Scene summary
+        # NEW: Scene summary (verbose block retained for compatibility)
         if snapshot.scene_summary:
             scene = snapshot.scene_summary
             lines.append("")
@@ -42,7 +103,7 @@ class DebugOverlay:
             lines.append(f"  Clutter score: {scene.clutter_score:.2f}")
             lines.append(f"  Is messy: {'YES' if scene.is_messy else 'NO'}")
         
-        # Proposal
+        # Proposal (verbose block retained for compatibility)
         if snapshot.current_proposal:
             prop = snapshot.current_proposal
             lines.append("")
@@ -154,4 +215,3 @@ class DebugOverlay:
             lines.append("⏳ OBJECT CONFIRM — Press C for next object")
         
         return lines
-

@@ -3,6 +3,42 @@
 **Philosophy**: SELECT → PROPOSE → CONFIRM → EXECUTE  
 **Safety**: `false_executions == 0`
 
+## Quick Start
+
+- Demo quick start: `README_DEMO.md`
+- Run command: `python scripts/run_demo.py --seed 42`
+- Full setup dependencies: `requirements.txt`
+
+## Architecture Overview
+
+- System architecture: `docs/ARCHITECTURE.md`
+- Execution/root-cause project summary: `ROBOTIC_ARM_MOVEMENT_ANALYSIS.md`
+- Frozen contracts: `docs/frozen_interfaces.md`
+
+## Safety Guarantees
+
+- **Invariant:** `false_executions == 0` (no primitive execution without valid authorization token)
+- **Execution gate:** orchestration checks authorization before execution tick
+- **Tier boundaries:**
+  - `src/interfaces/*` are contract-only and self-contained
+  - `src/core/*` does not directly import external AI/EEG providers
+  - composition wiring stays in `src/core/system_factory.py`
+
+## Development Workflow
+
+1. Install dependencies: `pip install -r requirements.txt`
+2. Run full test suite: `pytest tests/ -v`
+3. Run focused tests while iterating: `pytest tests/test_<module>.py -v`
+4. Run demo: `python scripts/run_demo.py --seed 42`
+5. Replay events: `python -m src.tools.replay_events demo_artifacts/demo_run_seed42_events.jsonl`
+
+## Known Limitations
+
+- PyBullet behavior can vary by platform/build; deterministic seeds do not guarantee identical contact physics across machines.
+- Gemini integrations may incur network/API cost and latency when enabled.
+- Real EEG path depends on compatible hardware/runtime availability and can fall back to keyboard when unavailable.
+- Current demo reliability still depends on test-local shims for some stress/fault scenarios until runtime execution path parity is fully unified.
+
 ## Current Status: Week 2 Complete ✅
 
 ### Capabilities

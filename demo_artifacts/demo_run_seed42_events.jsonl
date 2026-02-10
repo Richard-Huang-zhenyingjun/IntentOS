@@ -1,0 +1,7 @@
+{"event_type": "autonomy_level_set", "timestamp": 1770704066.083528, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "auth_token_issued", "timestamp": 1770704066.0867321, "data": {"token_id": "auth_5d8301b5139b", "scope": "task_session", "source": "test", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}
+{"event_type": "auth_token_completed", "timestamp": 1770704066.090132, "data": {"token_id": null, "final_trust": 1.0, "frame": 21}}
+{"event_type": "auth_token_issued", "timestamp": 1770704066.0907872, "data": {"token_id": "auth_f8ce92c88e7f", "scope": "task_session", "source": "test", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 23}}
+{"event_type": "auth_token_completed", "timestamp": 1770704066.093529, "data": {"token_id": null, "final_trust": 1.0, "frame": 32}}
+{"event_type": "auth_token_issued", "timestamp": 1770704066.094145, "data": {"token_id": "auth_0f297f8d2e1f", "scope": "task_session", "source": "test", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 34}}
+{"event_type": "auth_token_completed", "timestamp": 1770704066.096222, "data": {"token_id": null, "final_trust": 1.0, "frame": 43}}

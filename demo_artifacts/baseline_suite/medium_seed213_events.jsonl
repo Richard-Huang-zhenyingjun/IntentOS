@@ -1,0 +1,3 @@
+{"event_type": "autonomy_level_set", "timestamp": 1770705169.014148, "data": {"level": "A2_TASK_CONFIRM", "frame": 0}}
+{"event_type": "decision_received", "timestamp": 1770705169.230906, "data": {"intent": "confirm", "source": "keyboard", "quality": 1.0, "filter_action": "passed", "filter_reason": "", "raw_intents": {"keyboard": "confirm"}, "frame": 12}}
+{"event_type": "auth_token_issued", "timestamp": 1770705169.231016, "data": {"token_id": "auth_fa09cab220b4", "scope": "task_session", "source": "keyboard", "quality": 1.0, "autonomy_level": "A2_TASK_CONFIRM", "frame": 12}}

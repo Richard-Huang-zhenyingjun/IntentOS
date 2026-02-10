@@ -1,9 +1,13 @@
 """Robot motion controller."""
 
+import math
+import logging
 import numpy as np
 import pybullet as p
 from typing import Optional
 from src.robot.simulator import RobotSimulator, ArmState
+
+logger = logging.getLogger(__name__)
 
 
 class RobotController:
@@ -133,13 +137,21 @@ class RobotController:
         """Compute inverse kinematics using discovered EE link"""
         print(f"[CTRL-IK] Computing IK for target: {target_xyz}")
         try:
-            ik_result = p.calculateInverseKinematics(
-                bodyIndex=self.sim.robot_id,
-                endEffectorLinkIndex=self.ee_link_index,  # Use discovered index
-                targetPosition=target_xyz.tolist(),
-                maxNumIterations=100,
-                residualThreshold=0.001
-            )
+            # Some pybullet builds reject optional kwargs, so fallback cleanly.
+            try:
+                ik_result = p.calculateInverseKinematics(
+                    bodyIndex=self.sim.robot_id,
+                    endEffectorLinkIndex=self.ee_link_index,  # Use discovered index
+                    targetPosition=target_xyz.tolist(),
+                    maxNumIterations=100,
+                    residualThreshold=0.001
+                )
+            except TypeError:
+                ik_result = p.calculateInverseKinematics(
+                    bodyIndex=self.sim.robot_id,
+                    endEffectorLinkIndex=self.ee_link_index,
+                    targetPosition=target_xyz.tolist(),
+                )
             
             if ik_result:
                 n = len(self.joint_indices)
@@ -163,3 +175,46 @@ class RobotController:
         """Check if motion is in progress."""
         return self.executing
 
+    def check_divergence(self) -> bool:
+        """Detect if physics has diverged (NaN positions, inf forces)."""
+        if self.sim is None or self.sim.robot_id is None:
+            return False
+
+        for joint_idx in self.joint_indices:
+            joint_state = p.getJointState(self.sim.robot_id, joint_idx)
+            pos = joint_state[0]
+            motor_torque = joint_state[3]
+            if math.isnan(pos) or math.isinf(pos):
+                return True
+            if math.isnan(motor_torque) or math.isinf(motor_torque):
+                return True
+        return False
+
+    def divergence_state_dump(self) -> dict:
+        """Structured state dump for diagnostics/logging when divergence occurs."""
+        dump = {
+            "robot_id": self.sim.robot_id if self.sim else None,
+            "executing": self.executing,
+            "target_joints": self.target_joints.tolist() if isinstance(self.target_joints, np.ndarray) else None,
+            "joint_states": [],
+        }
+        if self.sim is None or self.sim.robot_id is None:
+            return dump
+
+        for joint_idx in self.joint_indices:
+            try:
+                pos, vel, _, torque = p.getJointState(self.sim.robot_id, joint_idx)
+                dump["joint_states"].append(
+                    {
+                        "joint_idx": joint_idx,
+                        "position": float(pos),
+                        "velocity": float(vel),
+                        "torque": float(torque),
+                    }
+                )
+            except Exception as exc:
+                logger.error("[CTRL] Failed to read joint state for dump: joint=%s err=%s", joint_idx, exc)
+                dump["joint_states"].append(
+                    {"joint_idx": joint_idx, "error": str(exc)}
+                )
+        return dump
