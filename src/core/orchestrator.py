@@ -363,11 +363,12 @@ class Orchestrator:
     def _execute_task_with_trust(self, world: WorldState):
         """Week 7: Execute with trust monitoring and re-auth checks"""
         
-        # Verify authorization
-        if not self.auth_manager.is_authorized():
-            logger.warning("[ORCH] No valid authorization! Pausing.")
-            self._trigger_reauth("no_valid_token")
-            return
+        # Hard safety invariant: execution requires an active authorization token.
+        assert self.auth_manager.is_authorized(), (
+            f"INVARIANT VIOLATED: execution without valid token. "
+            f"Token: {self.auth_manager.get_active_token_id()}, "
+            f"State: {self.state_machine.state}"
+        )
         
         # Execute one tick
         status = self.executor.tick(world)
@@ -708,4 +709,3 @@ class Orchestrator:
         """Cleanup."""
         self.sim.close()
         print("[ORCH] Closed")
-
