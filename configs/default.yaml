@@ -5,6 +5,10 @@ debug:
   diag_enabled: true
   diag_log_every_n_frames: 15
 
+# Simulator settings
+simulator:
+  use_gui: true
+
 # Robot parameters
 robot:
   max_force: 400.0

@@ -112,9 +112,10 @@ class RobotController:
             self._frame_counter = 0
         
         debug_config = self.config.get('debug', {})
-        diag_log_every_n = debug_config.get('diag_log_every_n_frames', 15)
-        
-        if self._frame_counter % diag_log_every_n == 0:
+        diag_log_every_n = debug_config.get('diag_log_every_n_frames', 120)
+        verbose_controller = debug_config.get('verbose_controller', False)
+
+        if verbose_controller and self._frame_counter % diag_log_every_n == 0:
             j0_cur = current_joints[0] if len(current_joints) > 0 else 0.0
             j0_tgt = self.target_joints[0] if len(self.target_joints) > 0 else 0.0
             print(f"[CTRL-DIAG] j0: cur={j0_cur:.4f} tgt={j0_tgt:.4f} diff={abs(j0_cur-j0_tgt):.4f}, error_norm={error:.4f}")

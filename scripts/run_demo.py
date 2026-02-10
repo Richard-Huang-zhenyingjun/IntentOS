@@ -46,6 +46,8 @@ CONTROL_BOX = """
 ╚════════════════════════════════════════╝
 """.strip("\n")
 
+OVERLAY_UPDATE_INTERVAL = 15  # ~4 Hz at 60 FPS
+
 
 def print_session_summary(metrics):
     print("\n" + "=" * 50)
@@ -91,9 +93,11 @@ def _load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _apply_overrides(config: dict, headless: bool, seed: int | None):
+def _apply_overrides(config: dict, headless: bool, gui: bool, seed: int | None):
     config.setdefault("simulator", {})
-    if headless:
+    if gui:
+        config["simulator"]["use_gui"] = True
+    elif headless:
         config["simulator"]["use_gui"] = False
 
     if seed is not None:
@@ -246,6 +250,7 @@ def _controlled_world_reset(orch, config: dict, seed: int | None = None):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Intent Interface Demo")
     parser.add_argument("--config", default="configs/default.yaml", help="Config file")
+    parser.add_argument("--gui", action="store_true", help="Force GUI mode")
     parser.add_argument("--headless", action="store_true", help="Run without GUI")
     parser.add_argument("--seed", type=int, default=None, help="Override world random seed")
     parser.add_argument(
@@ -303,7 +308,7 @@ def main() -> int:
         print(f"[DEMO] Failed to load config '{args.config}': {exc}")
         return 1
 
-    _apply_overrides(config, args.headless, args.seed)
+    _apply_overrides(config, args.headless, args.gui, args.seed)
     if args.auto_confirm_n > 0:
         config.setdefault("input", {})
         config["input"]["confirm_hold_frames"] = 1
@@ -342,6 +347,13 @@ def main() -> int:
         keyboard_source = _extract_keyboard_source(orch)
         overlay_enabled = config.get("ui", {}).get("show_overlay", True)
         overlay = None if args.headless or not overlay_enabled else DebugOverlay()
+        if not args.headless:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=1.5,
+                cameraYaw=45,
+                cameraPitch=-30,
+                cameraTargetPosition=[0.0, 0.0, 0.3],
+            )
         if auto_mode:
             next_id = _next_uncleaned_object_id(orch)
             if next_id is not None:
@@ -411,7 +423,7 @@ def main() -> int:
                 break
 
             overlay_ms = 0.0
-            if overlay is not None:
+            if overlay is not None and total_frames % OVERLAY_UPDATE_INTERVAL == 0:
                 perf_monitor.start("overlay")
                 overlay.render(last_snapshot)
                 overlay_ms = perf_monitor.end("overlay")

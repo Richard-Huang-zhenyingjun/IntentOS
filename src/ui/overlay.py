@@ -71,10 +71,46 @@ class DebugOverlay:
     
     def __init__(self):
         self.text_items: List[int] = []
+        self.highlight_items: List[int] = []
         self.builder = OverlayBuilder()
+
+    def _draw_object_highlight(self, object_id: int, color: List[float]) -> List[int]:
+        """Draw a wireframe AABB highlight around a selected object."""
+        line_ids: List[int] = []
+        try:
+            aabb_min, aabb_max = p.getAABB(object_id)
+        except Exception:
+            return line_ids
+
+        corners = [
+            [aabb_min[0], aabb_min[1], aabb_min[2]],
+            [aabb_max[0], aabb_min[1], aabb_min[2]],
+            [aabb_max[0], aabb_max[1], aabb_min[2]],
+            [aabb_min[0], aabb_max[1], aabb_min[2]],
+            [aabb_min[0], aabb_min[1], aabb_max[2]],
+            [aabb_max[0], aabb_min[1], aabb_max[2]],
+            [aabb_max[0], aabb_max[1], aabb_max[2]],
+            [aabb_min[0], aabb_max[1], aabb_max[2]],
+        ]
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),
+            (4, 5), (5, 6), (6, 7), (7, 4),
+            (0, 4), (1, 5), (2, 6), (3, 7),
+        ]
+        for start_idx, end_idx in edges:
+            line_ids.append(
+                p.addUserDebugLine(
+                    lineFromXYZ=corners[start_idx],
+                    lineToXYZ=corners[end_idx],
+                    lineColorRGB=color,
+                    lineWidth=3,
+                    lifeTime=0,
+                )
+            )
+        return line_ids
     
     def render(self, snapshot: UISnapshot):
-        """Enhanced overlay with scene understanding (Week 1)"""
+        """Render a compact, readable overlay and current target highlight."""
         # Clear old text
         for item_id in self.text_items:
             try:
@@ -82,109 +118,61 @@ class DebugOverlay:
             except:
                 pass
         self.text_items.clear()
-        
+
+        # Clear old highlight lines
+        for line_id in self.highlight_items:
+            try:
+                p.removeUserDebugItem(line_id)
+            except Exception:
+                pass
+        self.highlight_items.clear()
+
+        # Highlight current target for fast visual confirmation.
+        if snapshot.target_id is not None:
+            color = [0.0, 1.0, 0.0] if snapshot.target_locked else [1.0, 1.0, 0.0]
+            self.highlight_items = self._draw_object_highlight(snapshot.target_id, color)
+
         proposal = snapshot.current_proposal if snapshot.current_proposal else snapshot.proposal
-        lines = self.builder.build(
-            state=snapshot.state,
-            scene_summary=snapshot.scene_summary,
-            proposal=proposal,
-            trust=snapshot.task_trust,
-            autonomy_level=snapshot.autonomy_level,
-            last_event=snapshot.what_happened if hasattr(snapshot, "what_happened") else "",
-        )
-        lines = ["=" * 60, "INTENT INTERFACE - Week 1", "=" * 60] + lines
-        
-        # NEW: Scene summary (verbose block retained for compatibility)
-        if snapshot.scene_summary:
-            scene = snapshot.scene_summary
-            lines.append("")
-            lines.append("SCENE:")
-            lines.append(f"  Objects on table: {len(scene.objects_on_table)}")
-            lines.append(f"  Clutter score: {scene.clutter_score:.2f}")
-            lines.append(f"  Is messy: {'YES' if scene.is_messy else 'NO'}")
-        
-        # Proposal (verbose block retained for compatibility)
-        if snapshot.current_proposal:
-            prop = snapshot.current_proposal
-            lines.append("")
-            lines.append("PROPOSAL:")
-            lines.append(f"  Action: {prop.action.value}")
-            
-            # Week 4: Show proposer source and confidence
-            if hasattr(prop, 'source'):
-                lines.append(f"  Source: {prop.source}")  # Shows "heuristic" or "gemini"
-            if hasattr(prop, 'confidence'):
-                lines.append(f"  Confidence: {prop.confidence:.2f}")
-            
-            # Description/reason (different field names in different types)
-            if hasattr(prop, 'description'):
-                lines.append(f"  Description: {prop.description}")
-            elif hasattr(prop, 'reason'):
-                lines.append(f"  Reason: {prop.reason}")
-            
-            # Metadata if available
-            if hasattr(prop, 'metadata') and prop.metadata:
-                lines.append(f"  Metadata: {prop.metadata}")
-        
-        # NEW: Executor status
+        lines: List[str] = []
+        lines.append("=" * 40)
+        lines.append(f"STATE: {snapshot.state.value.upper()}")
+        if snapshot.autonomy_level:
+            lines.append(f"AUTONOMY: {snapshot.autonomy_level}")
+        if snapshot.task_trust is not None:
+            trust_bar = self._render_week7_info(snapshot)
+            lines.extend(trust_bar)
+        lines.append("=" * 40)
+
+        if proposal is not None:
+            action = getattr(getattr(proposal, "action", None), "value", str(getattr(proposal, "action", "unknown")))
+            lines.append(f"PROPOSAL: {action}")
+            if hasattr(proposal, "confidence") and proposal.confidence is not None:
+                lines.append(f"CONFIDENCE: {proposal.confidence:.2f}")
+
         if snapshot.executor_status and snapshot.executor_status != ExecutorStatus.IDLE:
-            lines.append("")
-            lines.append("EXECUTION:")
-            lines.append(f"  Status: {snapshot.executor_status.value}")
-            lines.append(f"  Primitive: {snapshot.primitive_index + 1}")
-        
-        # Week 4: Proposer stats
-        if hasattr(snapshot, 'proposer_stats') and snapshot.proposer_stats:
-            stats = snapshot.proposer_stats
-            lines.append("")
-            lines.append("PROPOSER STATS:")
-            lines.append(f"  Active: {stats.get('active_proposer', 'unknown')}")
-            fallback_rate = stats.get('fallback_rate', 0.0)
-            lines.append(f"  Fallback rate: {fallback_rate*100:.0f}%")
-            total_proposals = stats.get('total_proposals', 0)
-            if total_proposals > 0:
-                lines.append(f"  Total proposals: {total_proposals}")
-        
-        # Week 7: Trust + Autonomy display
-        week7_lines = self._render_week7_info(snapshot)
-        if week7_lines:
-            lines.append("")
-            lines.extend(week7_lines)
-        
-        # Controls
-        lines.append("")
-        lines.append("CONTROLS:")
-        lines.append("  L - Lock/Select target")
-        lines.append("  C - Confirm action")
-        lines.append("  X - Cancel action")
-        lines.append("  R - Reset system")
-        lines.append("  Q - Quit")
-        lines.append("="*60)
-        
+            lines.append("EXECUTING...")
+            lines.append(f"STEP: {snapshot.primitive_index + 1}")
+
+        if snapshot.what_happened:
+            lines.append(f"LAST: {self.builder._truncate(snapshot.what_happened)}")
+
         # Render to PyBullet screen
-        base_y = 0.95
+        base_y = 1.5
+        line_spacing = 0.06
         for i, line in enumerate(lines):
             text_id = p.addUserDebugText(
                 line,
-                textPosition=[-0.9, 0.0, base_y - i * 0.04],
+                textPosition=[-0.9, 0.0, base_y - i * line_spacing],
                 textColorRGB=[1, 1, 1],
                 textSize=1.2,
                 lifeTime=0
             )
             self.text_items.append(text_id)
-        
-        # Also print to console (matching contract)
-        overlay_text = "\n".join(lines)
-        print(overlay_text)
     
     def _render_week7_info(self, snapshot: UISnapshot):
         """Week 7: Render trust, autonomy, and authorization info"""
         lines = []
-        
-        # Autonomy level
-        if snapshot.autonomy_level:
-            lines.append(f"AUTONOMY: {snapshot.autonomy_level}")
-        
+
         # Trust bar
         if snapshot.task_trust is not None:
             trust = snapshot.task_trust
@@ -199,7 +187,7 @@ class DebugOverlay:
             else:
                 bar_symbol = '▒'
             bar = bar_symbol * filled + '░' * (bar_len - filled)
-            lines.append(f"TRUST: [{bar}] {trust:.2f}")
+            lines.append(f"TRUST: [{bar}] {trust:.2f}/1.00")
         
         # Authorization token
         if snapshot.auth_token_id:
