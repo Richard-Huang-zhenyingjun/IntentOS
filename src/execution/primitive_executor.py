@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Any
 from enum import Enum
 import numpy as np
 from src.interfaces.primitive import Primitive
@@ -28,9 +28,17 @@ class PrimitiveExecutor:
     Critical: Uses same multi-frame semantics as Week 0 orchestrator.
     """
     
-    def __init__(self, controller: RobotController, grasp: GraspController):
+    def __init__(
+        self,
+        controller: RobotController,
+        grasp: GraspController,
+        action_translator: Optional[Any] = None,
+        authorization_manager: Optional[Any] = None,
+    ):
         self.controller = controller
         self.grasp = grasp
+        self.action_translator = action_translator
+        self.authorization_manager = authorization_manager
         
         # Execution state
         self.active_plan: List[Primitive] = []
@@ -51,6 +59,11 @@ class PrimitiveExecutor:
         self._release_start_frame = 0
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
+        self._openvla_wait_for_update = False
+
+    def set_authorization_manager(self, authorization_manager: Any):
+        """Inject authorization manager after construction."""
+        self.authorization_manager = authorization_manager
 
     @staticmethod
     def _primitive_kind(primitive: Primitive) -> str:
@@ -131,6 +144,18 @@ class PrimitiveExecutor:
         """
         kind = self._primitive_kind(primitive)
 
+        # Hard safety boundary: if auth manager is wired, every primitive requires
+        # a valid active token before issuing any motion/gripper command.
+        # Exception: internally generated safe-pause primitives are allowed while
+        # re-auth is in progress (tagged via metadata description prefix).
+        if self.authorization_manager is not None:
+            safe_pause_desc = str((primitive.metadata or {}).get("description", ""))
+            is_safe_pause_primitive = safe_pause_desc.startswith("safe_pause:")
+            if not self.authorization_manager.is_authorized() and not is_safe_pause_primitive:
+                print(f"[EXECUTOR] Unauthorized primitive blocked: {primitive.type}")
+                self.status = ExecutorStatus.FAILED
+                return False
+
         if kind in ("reach", "move_to"):
             # Use controller from Week 0
             if primitive.target_xyz is None:
@@ -174,6 +199,9 @@ class PrimitiveExecutor:
                 return True
             self._release_started = False
             return True
+
+        elif kind == "openvla_trajectory":
+            return self._execute_openvla_trajectory_start(primitive, world)
         
         else:
             print(f"[EXECUTOR] Unknown primitive type: {primitive.type}")
@@ -205,6 +233,16 @@ class PrimitiveExecutor:
                 self._release_legacy_fast = False
                 return True
             return self._execute_release()
+
+        elif kind == "openvla_trajectory":
+            if self._openvla_wait_for_update:
+                if world.arm is None:
+                    return False
+                done = self.controller.update(world.arm)
+                if done:
+                    self._openvla_wait_for_update = False
+                return done
+            return True
         
         return False
     
@@ -404,4 +442,61 @@ class PrimitiveExecutor:
             self._release_started = False
             return True
 
+        return False
+
+    def _execute_openvla_trajectory_start(self, primitive: Primitive, world: WorldState) -> bool:
+        """
+        Execute an OpenVLA trajectory primitive.
+
+        Authorization was already checked in _start_primitive when an auth manager
+        is attached. This method only performs translation + command dispatch.
+        """
+        if self.action_translator is None:
+            print("[OPENVLA] Missing action_translator")
+            self.status = ExecutorStatus.FAILED
+            return False
+
+        metadata = primitive.metadata or {}
+        required = ("delta_position", "delta_rotation", "gripper")
+        if any(key not in metadata for key in required):
+            print("[OPENVLA] Invalid metadata for OPENVLA_TRAJECTORY")
+            self.status = ExecutorStatus.FAILED
+            return False
+
+        try:
+            translated = self.action_translator.translate_from_metadata(metadata)
+        except Exception as exc:
+            print(f"[OPENVLA] Translation error: {exc}")
+            self.status = ExecutorStatus.FAILED
+            return False
+
+        token_id = None
+        if self.authorization_manager is not None and hasattr(self.authorization_manager, "get_active_token_id"):
+            token_id = self.authorization_manager.get_active_token_id()
+
+        if not translated.ik_success:
+            print(f"[OPENVLA] IK failed (error={translated.ik_error:.4f}m), token={token_id}")
+            self.status = ExecutorStatus.FAILED
+            return False
+
+        print(
+            "[OPENVLA] Executing trajectory "
+            f"(ik_error={translated.ik_error:.4f}m, token={token_id})"
+        )
+
+        if hasattr(self.controller, "move_to_joint_positions"):
+            converged = bool(self.controller.move_to_joint_positions(translated.joint_positions))
+            if not converged:
+                print("[OPENVLA] Joint convergence timeout")
+                self.status = ExecutorStatus.FAILED
+                return False
+            return True
+
+        if hasattr(self.controller, "move_to_position"):
+            self.controller.move_to_position(np.array(translated.target_ee_position, dtype=float))
+            self._openvla_wait_for_update = True
+            return True
+
+        print("[OPENVLA] Controller lacks supported command API")
+        self.status = ExecutorStatus.FAILED
         return False

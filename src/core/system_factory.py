@@ -10,6 +10,7 @@ from src.intelligence.proposer_heuristic import HeuristicProposer
 from src.intelligence.proposer_gemini import GeminiProposer
 from src.external.openvla.proposer_openvla import OpenVLAProposer
 from src.external.openvla.adapter_fake import FakeOpenVLAAdapter
+from src.external.openvla.action_translator_fake import FakeActionTranslator
 from src.intelligence.scene_summarizer import SceneSummarizer
 from src.planning.plan_compiler import PlanCompiler
 from src.execution.primitive_executor import PrimitiveExecutor
@@ -88,8 +89,8 @@ def build_system(config: dict) -> Orchestrator:
     heuristic = HeuristicProposer(config)
     registry.register("heuristic", heuristic, priority=0, is_fallback=True)
 
-    # Week 2: OpenVLA proposer (priority > Gemini)
-    openvla_proposer = _build_openvla_proposer(config=config, camera_provider=None)
+    # Week 3: OpenVLA proposer receives simulator camera provider when available.
+    openvla_proposer = _build_openvla_proposer(config=config, camera_provider=sim)
     if openvla_proposer is not None:
         openvla_priority = config.get("openvla", {}).get("priority", 15)
         registry.register("openvla", openvla_proposer, priority=openvla_priority)
@@ -117,7 +118,8 @@ def build_system(config: dict) -> Orchestrator:
     compiler = PlanCompiler(config)
     
     # 8. Primitive executor (concrete implementation)
-    executor = PrimitiveExecutor(controller, grasp)
+    action_translator = _build_action_translator(sim)
+    executor = PrimitiveExecutor(controller, grasp, action_translator=action_translator)
     
     # 9. Decision pipeline (Week 5)
     decision_pipeline = _build_decision_pipeline(config, events)
@@ -182,6 +184,28 @@ def _build_openvla_proposer(config: dict, camera_provider=None) -> Optional[Open
         priority=openvla_cfg.get("priority", 15),
         enabled=True,
     )
+
+
+def _build_action_translator(sim):
+    """
+    Build action translator for OpenVLA trajectory primitives.
+
+    If running with a MuJoCo backend exposing _model/_data, use real translator.
+    Otherwise use fake translator for PyBullet/test environments.
+    """
+    model = getattr(sim, "_model", None)
+    data = getattr(sim, "_data", None)
+    if model is not None and data is not None:
+        try:
+            from src.external.openvla.action_translator import ActionTranslator
+
+            print("[FACTORY] Using REAL ActionTranslator")
+            return ActionTranslator(model=model, data=data, ee_site_name="end_effector")
+        except Exception as exc:
+            logger.warning("[FACTORY] Real ActionTranslator failed (%s); falling back to fake", exc)
+
+    print("[FACTORY] Using FAKE ActionTranslator")
+    return FakeActionTranslator()
 
 
 def _build_decision_pipeline(config: dict, events: EventEmitter) -> DecisionPipeline:

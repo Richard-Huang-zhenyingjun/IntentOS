@@ -109,6 +109,8 @@ class Orchestrator:
         
         # Week 7: Authorization
         self.auth_manager = AuthorizationManager()
+        if hasattr(self.executor, "set_authorization_manager"):
+            self.executor.set_authorization_manager(self.auth_manager)
         
         # Week 7: Trust
         self.trust_engine = TrustEngine(config)
@@ -570,7 +572,7 @@ class Orchestrator:
         
         # Invalidate current token
         self.auth_manager.invalidate_for_reauth(reason)
-        
+
         # Generate safe pause primitives
         is_grasping = self.grasp.is_holding()
         self._safe_pause_primitives = self.safe_pause_helper.generate_safe_pause_primitives(
@@ -590,6 +592,8 @@ class Orchestrator:
         if not self._safe_pause_primitives:
             # Safe pause complete
             self._safe_pause_active = False
+            # Force user re-auth after pause; do not leave any active token.
+            self.auth_manager.invalidate("safe_pause_complete_reauth_required")
             if self.events:
                 self.events.emit(
                     EventType.SAFE_PAUSE_COMPLETED,
