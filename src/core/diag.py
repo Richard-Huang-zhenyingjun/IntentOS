@@ -77,8 +77,37 @@ def _summarize_config(config: dict) -> Dict[str, Any]:
         "sources_enabled": input_cfg.get("sources_enabled", []),
         "autonomy_level": auto_cfg.get("level", "A2_TASK_CONFIRM"),
         "gemini_enabled": gemini_cfg.get("enabled", False),
+        "openvla_enabled": config.get("openvla", {}).get("enabled", False),
         "eeg_enabled": eeg_cfg.get("enabled", False),
     }
+
+
+def _check_openvla(config: dict) -> tuple[str, List[str]]:
+    """Check OpenVLA proposer status and runtime readiness hints."""
+    warnings: List[str] = []
+    openvla_cfg = config.get("openvla", {})
+
+    if not openvla_cfg.get("enabled", False):
+        return "DISABLED (config)", warnings
+
+    if openvla_cfg.get("use_fake", True):
+        return "OK (fake adapter, no GPU)", warnings
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            try:
+                gpu_name = torch.cuda.get_device_name(0)
+            except Exception:
+                gpu_name = "CUDA device"
+            return f"OK (GPU: {gpu_name})", warnings
+
+        warnings.append("OpenVLA real adapter enabled without CUDA GPU; inference will be slow.")
+        return "WARNING (no GPU, will be slow)", warnings
+    except ImportError:
+        warnings.append("OpenVLA real adapter enabled but torch is not installed.")
+        return "WARNING (torch not installed)", warnings
 
 
 def run_startup_diagnostics(config: dict) -> DiagnosticReport:
@@ -103,6 +132,12 @@ def run_startup_diagnostics(config: dict) -> DiagnosticReport:
                     "Gemini enabled but no API key found in config['gemini']['api_key'] "
                     "or GEMINI_API_KEY. Fallback proposer may be used."
                 )
+
+    # OpenVLA checks
+    openvla_status, openvla_warnings = _check_openvla(config)
+    report.config_summary["openvla"] = openvla_status
+    for warning in openvla_warnings:
+        report.add_warning(warning)
 
     # EEG checks (do not touch src/input/eeg/*)
     eeg_cfg = config.get("eeg", {})
@@ -241,4 +276,3 @@ def format_diagnostic_report(report: DiagnosticReport, title: str) -> str:
 
     lines.append("=" * 60)
     return "\n".join(lines)
-

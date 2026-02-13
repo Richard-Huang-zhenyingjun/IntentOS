@@ -117,6 +117,16 @@ gemini:
     save_raw_response: true
     truncate_chars: 2000
 
+# Week 2: OpenVLA proposer
+openvla:
+  enabled: true
+  use_fake: true
+  priority: 15
+  camera_name: "overhead"
+  model_name: "openvla/openvla-7b"
+  device: "auto"
+  torch_dtype: "bfloat16"
+
 proposers:
   blocked_states: ["executing"]     # No external proposers during execution (use lowercase state names)
 

@@ -18,6 +18,9 @@ class SessionMetrics:
     proposals_generated: int
     proposals_confirmed: int
     proposals_cancelled: int
+    openvla_proposals: int
+    openvla_failures: int
+    openvla_success_rate: float
 
     # Execution
     objects_attempted: int
@@ -59,6 +62,9 @@ class MetricsCollector:
             proposals_generated=0,
             proposals_confirmed=0,
             proposals_cancelled=0,
+            openvla_proposals=0,
+            openvla_failures=0,
+            openvla_success_rate=0.0,
             objects_attempted=0,
             objects_succeeded=0,
             objects_failed=0,
@@ -88,10 +94,17 @@ class MetricsCollector:
 
         if event_type in ("proposal_generated", "proposal_issued"):
             self.metrics.proposals_generated += 1
+            source = str(data.get("source", "")).lower()
+            if source == "openvla":
+                self.metrics.openvla_proposals += 1
         elif event_type in ("confirmed", "confirm_received", "auth_token_issued"):
             self.metrics.proposals_confirmed += 1
         elif event_type in ("cancelled", "decision_rejected"):
             self.metrics.proposals_cancelled += 1
+        elif event_type in ("proposer_failed",):
+            source = str(data.get("source", "")).lower()
+            if source == "openvla":
+                self.metrics.openvla_failures += 1
 
         elif event_type == "primitive_completed":
             self.metrics.primitives_executed += 1
@@ -174,6 +187,12 @@ class MetricsCollector:
         if self.metrics.objects_succeeded > 0:
             self.metrics.avg_time_per_object = (
                 self.metrics.total_execution_time / self.metrics.objects_succeeded
+            )
+
+        openvla_total = self.metrics.openvla_proposals + self.metrics.openvla_failures
+        if openvla_total > 0:
+            self.metrics.openvla_success_rate = (
+                self.metrics.openvla_proposals / openvla_total
             )
 
         return self.metrics

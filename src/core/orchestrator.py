@@ -242,6 +242,7 @@ class Orchestrator:
                 # Convert IntentProposal to ArmProposal for state machine
                 arm_action = ArmActionType(self.current_proposal.action.value)
                 self.state_machine.propose_action(arm_action, self.current_proposal.description)
+                self._emit_proposal_event(self.current_proposal)
         
         elif state == 'confirming':
             if decision_frame.is_confirm:
@@ -278,6 +279,38 @@ class Orchestrator:
             'event_type': event_type.value if hasattr(event_type, 'value') else str(event_type),
             'data': data or {},
         })
+
+    def _emit_proposal_event(self, proposal: IntentProposal) -> None:
+        """Emit normalized proposal event with optional OpenVLA payload."""
+        if self.events is None:
+            return
+
+        data = {
+            'action': proposal.action.value if hasattr(proposal.action, "value") else str(proposal.action),
+            'description': proposal.description,
+            'source': proposal.source,
+            'confidence': float(proposal.confidence),
+        }
+        meta = proposal.metadata or {}
+        if proposal.source == "openvla" or meta.get("proposer") == "openvla":
+            data['instruction'] = meta.get('instruction', '')
+            data['target_object'] = (
+                meta.get('target_object')
+                if meta.get('target_object') is not None
+                else meta.get('target_object_id')
+            )
+            data['action_data'] = {
+                'delta_position': meta.get('delta_position'),
+                'delta_rotation': meta.get('delta_rotation'),
+                'gripper': meta.get('gripper'),
+                'raw_action': meta.get('raw_action'),
+            }
+
+        self.events.emit(
+            EventType.PROPOSAL_ISSUED,
+            frame=self.global_frame_counter,
+            data=data,
+        )
 
     def _refresh_input_status_message(self):
         """Surface high-signal runtime input/fallback status for overlay."""

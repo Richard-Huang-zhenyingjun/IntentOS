@@ -20,6 +20,52 @@ class OverlayBuilder:
             return text
         return text[: self.max_line_len - 3] + "..."
 
+    def _format_openvla_proposal(self, proposal) -> List[str]:
+        """Format OpenVLA proposal details for the overlay."""
+        lines: List[str] = []
+        meta = getattr(proposal, "metadata", {}) or {}
+
+        lines.append(self._truncate("PROPOSAL (OpenVLA)"))
+        lines.append(self._truncate(f"Instruction: {meta.get('instruction', 'N/A')}"))
+
+        delta_pos = meta.get("delta_position", [0.0, 0.0, 0.0])
+        if len(delta_pos) >= 3:
+            lines.append(
+                self._truncate(
+                    f"Delta pos: ({delta_pos[0]:+.3f}, {delta_pos[1]:+.3f}, {delta_pos[2]:+.3f})"
+                )
+            )
+
+        delta_rot = meta.get("delta_rotation", [0.0, 0.0, 0.0])
+        if len(delta_rot) >= 3:
+            lines.append(
+                self._truncate(
+                    f"Delta rot: ({delta_rot[0]:+.3f}, {delta_rot[1]:+.3f}, {delta_rot[2]:+.3f})"
+                )
+            )
+
+        gripper = float(meta.get("gripper", 0.5))
+        grip_str = "CLOSE" if gripper < 0.5 else "OPEN"
+        lines.append(self._truncate(f"Gripper: {grip_str} ({gripper:.2f})"))
+
+        confidence = meta.get("confidence", getattr(proposal, "confidence", 0.0))
+        lines.append(self._truncate(f"Confidence: {float(confidence):.1%}"))
+        return lines
+
+    def _format_default_proposal(self, proposal) -> List[str]:
+        """Format non-OpenVLA proposal details."""
+        lines: List[str] = []
+        source = getattr(proposal, "source", "unknown")
+        action = getattr(getattr(proposal, "action", None), "value", getattr(proposal, "action", "unknown"))
+        confidence = getattr(proposal, "confidence", None)
+        rationale = getattr(proposal, "description", None) or getattr(proposal, "reason", "")
+        lines.append(self._truncate(f"Intent: {action} ({source})"))
+        if confidence is not None:
+            lines.append(self._truncate(f"Confidence: {confidence:.2f}"))
+        if rationale:
+            lines.append(self._truncate(f"Rationale: {rationale}"))
+        return lines
+
     def build(
         self,
         state,
@@ -49,15 +95,13 @@ class OverlayBuilder:
 
         lines.append("PROPOSAL")
         if proposal is not None:
-            source = getattr(proposal, "source", "unknown")
-            action = getattr(getattr(proposal, "action", None), "value", getattr(proposal, "action", "unknown"))
-            confidence = getattr(proposal, "confidence", None)
-            rationale = getattr(proposal, "description", None) or getattr(proposal, "reason", "")
-            lines.append(self._truncate(f"Intent: {action} ({source})"))
-            if confidence is not None:
-                lines.append(self._truncate(f"Confidence: {confidence:.2f}"))
-            if rationale:
-                lines.append(self._truncate(f"Rationale: {rationale}"))
+            source = (getattr(proposal, "source", "") or "").lower()
+            meta = getattr(proposal, "metadata", {}) or {}
+            proposer = str(meta.get("proposer", source)).lower()
+            if proposer == "openvla" or source == "openvla":
+                lines.extend(self._format_openvla_proposal(proposal))
+            else:
+                lines.extend(self._format_default_proposal(proposal))
 
         if last_event:
             lines.append("LAST EVENT")
@@ -144,10 +188,26 @@ class DebugOverlay:
         lines.append("=" * 40)
 
         if proposal is not None:
-            action = getattr(getattr(proposal, "action", None), "value", str(getattr(proposal, "action", "unknown")))
-            lines.append(f"PROPOSAL: {action}")
-            if hasattr(proposal, "confidence") and proposal.confidence is not None:
-                lines.append(f"CONFIDENCE: {proposal.confidence:.2f}")
+            source = (getattr(proposal, "source", "") or "").lower()
+            meta = getattr(proposal, "metadata", {}) or {}
+            proposer = str(meta.get("proposer", source)).lower()
+            if proposer == "openvla" or source == "openvla":
+                lines.append("PROPOSAL: OPENVLA")
+                lines.append(self.builder._truncate(f"INSTR: {meta.get('instruction', 'N/A')}"))
+                delta_pos = meta.get("delta_position", [0.0, 0.0, 0.0])
+                if len(delta_pos) >= 3:
+                    lines.append(
+                        self.builder._truncate(
+                            f"ΔPOS: {delta_pos[0]:+.3f},{delta_pos[1]:+.3f},{delta_pos[2]:+.3f}"
+                        )
+                    )
+                grip = float(meta.get("gripper", 0.5))
+                lines.append(f"GRIP: {'CLOSE' if grip < 0.5 else 'OPEN'} ({grip:.2f})")
+            else:
+                action = getattr(getattr(proposal, "action", None), "value", str(getattr(proposal, "action", "unknown")))
+                lines.append(f"PROPOSAL: {action}")
+                if hasattr(proposal, "confidence") and proposal.confidence is not None:
+                    lines.append(f"CONFIDENCE: {proposal.confidence:.2f}")
 
         if snapshot.executor_status and snapshot.executor_status != ExecutorStatus.IDLE:
             lines.append("EXECUTING...")

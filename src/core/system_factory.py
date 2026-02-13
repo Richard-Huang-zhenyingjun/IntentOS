@@ -8,6 +8,8 @@ from src.core.orchestrator import Orchestrator
 from src.intelligence.proposer_registry import ProposerRegistry
 from src.intelligence.proposer_heuristic import HeuristicProposer
 from src.intelligence.proposer_gemini import GeminiProposer
+from src.external.openvla.proposer_openvla import OpenVLAProposer
+from src.external.openvla.adapter_fake import FakeOpenVLAAdapter
 from src.intelligence.scene_summarizer import SceneSummarizer
 from src.planning.plan_compiler import PlanCompiler
 from src.execution.primitive_executor import PrimitiveExecutor
@@ -85,6 +87,13 @@ def build_system(config: dict) -> Orchestrator:
     registry = ProposerRegistry()
     heuristic = HeuristicProposer(config)
     registry.register("heuristic", heuristic, priority=0, is_fallback=True)
+
+    # Week 2: OpenVLA proposer (priority > Gemini)
+    openvla_proposer = _build_openvla_proposer(config=config, camera_provider=None)
+    if openvla_proposer is not None:
+        openvla_priority = config.get("openvla", {}).get("priority", 15)
+        registry.register("openvla", openvla_proposer, priority=openvla_priority)
+        print(f"[FACTORY] OpenVLA proposer registered (priority={openvla_priority})")
     
     # Week 4: Gemini proposer (if enabled)
     gemini_cfg = config.get('gemini', {})
@@ -139,6 +148,40 @@ def _build_gemini_client(config: dict):
     else:
         from src.external.gemini.client import RealGeminiClient
         return RealGeminiClient(config)
+
+
+def _build_openvla_proposer(config: dict, camera_provider=None) -> Optional[OpenVLAProposer]:
+    """Build OpenVLA proposer from config (fake by default for CPU/CI safety)."""
+    openvla_cfg = config.get("openvla", {})
+    if not openvla_cfg.get("enabled", False):
+        logger.info("[FACTORY] OpenVLA proposer disabled")
+        return None
+
+    use_fake = openvla_cfg.get("use_fake", True)
+    if use_fake:
+        adapter = FakeOpenVLAAdapter()
+        adapter.load_model()
+        print("[FACTORY] Using FAKE OpenVLA adapter")
+    else:
+        try:
+            from src.external.openvla.adapter import OpenVLAAdapter
+
+            adapter = OpenVLAAdapter()
+            adapter.load_model()
+            print("[FACTORY] Using REAL OpenVLA adapter")
+        except Exception as exc:
+            logger.warning("[FACTORY] OpenVLA real adapter failed (%s); falling back to fake", exc)
+            adapter = FakeOpenVLAAdapter()
+            adapter.load_model()
+            print("[FACTORY] Using FAKE OpenVLA adapter (fallback)")
+
+    return OpenVLAProposer(
+        openvla_adapter=adapter,
+        camera_provider=camera_provider,
+        camera_name=openvla_cfg.get("camera_name", "overhead"),
+        priority=openvla_cfg.get("priority", 15),
+        enabled=True,
+    )
 
 
 def _build_decision_pipeline(config: dict, events: EventEmitter) -> DecisionPipeline:

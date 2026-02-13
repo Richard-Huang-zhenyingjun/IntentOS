@@ -9,6 +9,7 @@ class PrimitiveType(Enum):
     GRASP = "grasp"          # Attach grasp constraint
     MOVE_TO = "move_to"      # Move to position (while grasping)
     RELEASE = "release"      # Detach grasp constraint
+    OPENVLA_TRAJECTORY = "openvla_trajectory"  # VLA-driven trajectory primitive
 
 @dataclass
 class Primitive:
@@ -21,6 +22,5 @@ class Primitive:
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
-
 
 
