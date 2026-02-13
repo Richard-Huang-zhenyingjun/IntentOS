@@ -5,6 +5,7 @@ from src.interfaces.primitive import Primitive
 from src.robot.world_state import WorldState
 from src.robot.controller import RobotController
 from src.robot.grasp import GraspController
+from src.core.invariant_checker import InvariantChecker
 
 class ExecutorStatus(Enum):
     IDLE = "idle"
@@ -60,6 +61,8 @@ class PrimitiveExecutor:
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
         self._openvla_wait_for_update = False
+        self.last_error_code: Optional[str] = None
+        self._invariant_checker = InvariantChecker()
 
     def set_authorization_manager(self, authorization_manager: Any):
         """Inject authorization manager after construction."""
@@ -77,6 +80,7 @@ class PrimitiveExecutor:
         self.plan_index = 0
         self.active_primitive_started = False
         self.status = ExecutorStatus.RUNNING if plan else ExecutorStatus.IDLE
+        self.last_error_code = None
         self._reset_grasp_state()
         self._release_started = False
         self._grasp_legacy_fast = False
@@ -92,6 +96,8 @@ class PrimitiveExecutor:
             Current status (RUNNING, COMPLETE, FAILED)
         """
         self.frame_count += 1
+        # Reset per-tick error marker unless a failure sets it this frame.
+        self.last_error_code = None
 
         # No active plan
         if not self.active_plan:
@@ -102,6 +108,7 @@ class PrimitiveExecutor:
         if self.plan_index >= len(self.active_plan):
             print("[EXECUTOR] Plan complete!")
             self.status = ExecutorStatus.COMPLETE
+            self._invariant_checker.assert_invariant()
             return self.status
         
         # Execute current primitive
@@ -115,6 +122,9 @@ class PrimitiveExecutor:
             if not success:
                 print(f"[EXECUTOR] Failed to start primitive {self.plan_index}: {primitive.type}")
                 self.status = ExecutorStatus.FAILED
+                if self.last_error_code is None:
+                    self.last_error_code = "primitive_failed"
+                self._invariant_checker.assert_invariant()
                 return self.status
             
             self.active_primitive_started = True
@@ -154,6 +164,15 @@ class PrimitiveExecutor:
             if not self.authorization_manager.is_authorized() and not is_safe_pause_primitive:
                 print(f"[EXECUTOR] Unauthorized primitive blocked: {primitive.type}")
                 self.status = ExecutorStatus.FAILED
+                self.last_error_code = "unauthorized_execution_blocked"
+                token_id = ""
+                if hasattr(self.authorization_manager, "get_active_token_id"):
+                    token_id = self.authorization_manager.get_active_token_id() or ""
+                self._invariant_checker.record_execution_attempt(
+                    has_valid_token=False,
+                    executed=False,
+                    token_id=token_id,
+                )
                 return False
 
         if kind in ("reach", "move_to"):
@@ -454,6 +473,7 @@ class PrimitiveExecutor:
         if self.action_translator is None:
             print("[OPENVLA] Missing action_translator")
             self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_missing_translator"
             return False
 
         metadata = primitive.metadata or {}
@@ -461,6 +481,7 @@ class PrimitiveExecutor:
         if any(key not in metadata for key in required):
             print("[OPENVLA] Invalid metadata for OPENVLA_TRAJECTORY")
             self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_invalid_metadata"
             return False
 
         try:
@@ -468,6 +489,7 @@ class PrimitiveExecutor:
         except Exception as exc:
             print(f"[OPENVLA] Translation error: {exc}")
             self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_translation_error"
             return False
 
         token_id = None
@@ -477,6 +499,14 @@ class PrimitiveExecutor:
         if not translated.ik_success:
             print(f"[OPENVLA] IK failed (error={translated.ik_error:.4f}m), token={token_id}")
             self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_ik_fail"
+            return False
+
+        joint_targets = np.asarray(translated.joint_positions, dtype=float)
+        if not np.all(np.isfinite(joint_targets)):
+            print(f"[OPENVLA] Invalid joint targets (NaN/Inf), token={token_id}")
+            self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_invalid_joint_targets"
             return False
 
         print(
@@ -485,18 +515,35 @@ class PrimitiveExecutor:
         )
 
         if hasattr(self.controller, "move_to_joint_positions"):
-            converged = bool(self.controller.move_to_joint_positions(translated.joint_positions))
+            converged = bool(self.controller.move_to_joint_positions(joint_targets))
+            self._invariant_checker.record_execution_attempt(
+                has_valid_token=True,
+                executed=True,
+                token_id=str(token_id or ""),
+            )
             if not converged:
                 print("[OPENVLA] Joint convergence timeout")
                 self.status = ExecutorStatus.FAILED
+                self.last_error_code = "openvla_timeout"
                 return False
             return True
 
         if hasattr(self.controller, "move_to_position"):
             self.controller.move_to_position(np.array(translated.target_ee_position, dtype=float))
             self._openvla_wait_for_update = True
+            self._invariant_checker.record_execution_attempt(
+                has_valid_token=True,
+                executed=True,
+                token_id=str(token_id or ""),
+            )
             return True
 
         print("[OPENVLA] Controller lacks supported command API")
         self.status = ExecutorStatus.FAILED
+        self.last_error_code = "openvla_controller_api_missing"
         return False
+
+    @property
+    def invariant_summary(self) -> dict:
+        """Expose execution invariant counters for diagnostics/metrics."""
+        return self._invariant_checker.summary

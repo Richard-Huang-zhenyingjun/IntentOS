@@ -25,7 +25,7 @@ from src.interfaces import (
     ProposerBase, PlanCompilerBase,
     ExecStatus, ErrorCode,
     WorldArtifacts,
-    Primitive,
+    Primitive, PrimitiveType,
 )
 # Week 5: Decision pipeline
 from src.input.types import DecisionFrame, DecisionIntent
@@ -433,11 +433,8 @@ class Orchestrator:
             logger.warning("[ORCH] No proposal to compile")
             self.state_machine.reset()
             return
-        
-        plan = self.compiler.compile(
-            self.current_proposal,
-            self.current_scene
-        )
+
+        plan = self._compile_plan_for_current_proposal()
         
         if not plan:
             logger.warning("[ORCH] Compiler rejected proposal - no valid plan")
@@ -452,9 +449,29 @@ class Orchestrator:
         self._safe_pause_active = False
         self._awaiting_object_confirm = False
         self._awaiting_reauth = False
+
+        if self.events:
+            primitive_kind = getattr(plan[0].type, "value", str(plan[0].type)) if plan else "none"
+            self.events.emit(
+                EventType.EXECUTION_STARTED,
+                frame=self.global_frame_counter,
+                data={
+                    'source': self.current_proposal.source,
+                    'primitive_type': primitive_kind,
+                    'token_id': self.auth_manager.get_active_token_id(),
+                },
+            )
         
         # Record confirmation
         self.trust_metrics.record_confirmation(allowed=True)
+
+    def _compile_plan_for_current_proposal(self) -> list[Primitive]:
+        """Compile current proposal via compiler (OpenVLA + heuristic)."""
+        if self.current_proposal is None:
+            return []
+        if hasattr(self.compiler, "compile_proposal"):
+            return self.compiler.compile_proposal(self.current_proposal, self.current_scene)
+        return self.compiler.compile(self.current_proposal, self.current_scene)
     
     def _execute_task_with_trust(self, world: WorldState):
         """Week 7: Execute with trust monitoring and re-auth checks"""
@@ -468,26 +485,41 @@ class Orchestrator:
         
         # Execute one tick
         status = self.executor.tick(world)
+        token_id = self.auth_manager.get_active_token_id()
         
         # Week 7: Update trust from primitive results
         # Note: PrimitiveExecutor doesn't return structured results, so we infer from status
         # For now, we'll track failures via executor status
         if status == ExecutorStatus.FAILED:
-            # Infer error code from context (simplified for now)
-            error_code = "primitive_failed"  # Generic failure
+            raw_error = getattr(self.executor, "last_error_code", None) or "primitive_failed"
+            error_code = self._map_executor_error_to_trust_code(raw_error)
             self.trust_engine.record_primitive_result(
                 error_code=error_code,
                 object_index=self._current_object_index,
             )
+            # Count failed object attempts for re-auth rules based on consecutive failures.
+            self.trust_engine.record_object_complete(
+                success=False,
+                object_index=self._current_object_index,
+            )
             
             if self.events:
+                self.events.emit(
+                    EventType.EXECUTION_FAILED,
+                    frame=self.global_frame_counter,
+                    data={
+                        'error_code': raw_error,
+                        'mapped_error': error_code,
+                        'token_id': token_id,
+                    },
+                )
                 self.events.emit(
                     EventType.TRUST_UPDATED,
                     frame=self.global_frame_counter,
                     data={
                         'task_trust': self.trust_engine.task_trust,
                         'event': error_code,
-                        'token_id': self.auth_manager.get_active_token_id(),
+                        'token_id': token_id,
                     },
                 )
         
@@ -499,6 +531,23 @@ class Orchestrator:
                 success=True,
                 object_index=self._current_object_index,
             )
+            if self.events:
+                self.events.emit(
+                    EventType.TRUST_UPDATED,
+                    frame=self.global_frame_counter,
+                    data={
+                        'task_trust': self.trust_engine.task_trust,
+                        'event': 'object_success',
+                        'token_id': token_id,
+                    },
+                )
+                self.events.emit(
+                    EventType.EXECUTION_COMPLETED,
+                    frame=self.global_frame_counter,
+                    data={
+                        'token_id': token_id,
+                    },
+                )
             self.auth_manager.record_object_started()  # Track for SINGLE_OBJECT scope
             
             # A1 mode: check if token is exhausted (single object)
@@ -527,8 +576,28 @@ class Orchestrator:
         if reauth_reason:
             self._trigger_reauth(reauth_reason)
             return
+
+        # Failure with no re-auth trigger still ends this execution cycle.
+        if status == ExecutorStatus.FAILED:
+            self._complete_task_early(f"execution_failed:{getattr(self.executor, 'last_error_code', 'unknown')}")
+            return
         
         # Continue execution (status == RUNNING)
+
+    @staticmethod
+    def _map_executor_error_to_trust_code(raw_error: str) -> str:
+        """Map executor failure detail to trust penalty event code."""
+        if raw_error == "openvla_ik_fail":
+            return "ik_fail"
+        if raw_error == "openvla_timeout":
+            return "primitive_timeout"
+        if raw_error == "unauthorized_execution_blocked":
+            return "grasp_fail"  # severe bucket
+        if raw_error in ("openvla_translation_error", "openvla_controller_api_missing"):
+            return "object_timeout"  # severe bucket
+        if raw_error == "openvla_invalid_joint_targets":
+            return "ik_fail"
+        return "primitive_failed"
     
     def _handle_awaiting_object_confirm(self, decision_frame: DecisionFrame):
         """Week 7: A1 mode - waiting for confirm between objects"""
@@ -618,6 +687,7 @@ class Orchestrator:
     
     def _complete_task(self):
         """Week 7: Normal task completion"""
+        token_id = self.auth_manager.get_active_token_id()
         self.auth_manager.complete()
         self.trust_engine.end_session()
         
@@ -626,7 +696,7 @@ class Orchestrator:
                 EventType.AUTH_TOKEN_COMPLETED,
                 frame=self.global_frame_counter,
                 data={
-                    'token_id': self.auth_manager.get_active_token_id(),
+                    'token_id': token_id,
                     'final_trust': self.trust_engine.task_trust,
                 },
             )

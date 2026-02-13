@@ -31,6 +31,11 @@ class PlanCompiler(PlanCompilerBase):
     ) -> List[Primitive]:
         """Compile proposal into validated primitives"""
         self.last_validation_error = ErrorCode.NONE
+
+        # OpenVLA proposals carry fully formed trajectory metadata and should
+        # compile to a single execution primitive.
+        if self._is_openvla_proposal(proposal):
+            return self._compile_openvla_plan(proposal)
         
         if proposal.action == ActionType.CLEAN_TABLE:
             # If Gemini suggested specific objects (Week 5+), use those
@@ -52,6 +57,19 @@ class PlanCompiler(PlanCompilerBase):
         else:
             print(f"[COMPILER] Unknown action type: {proposal.action}")
             return []
+
+    def compile_proposal(
+        self,
+        proposal: IntentProposal,
+        scene: SceneSummary,
+    ) -> List[Primitive]:
+        """
+        Compatibility helper for callers that use compile_proposal naming.
+
+        Delegates to compile(), which already handles OpenVLA and heuristic
+        proposal formats.
+        """
+        return self.compile(proposal, scene)
     
     def compile_for_object(
         self,
@@ -199,3 +217,49 @@ class PlanCompiler(PlanCompilerBase):
             y_min <= y <= y_max and
             z_min <= z <= z_max
         )
+
+    @staticmethod
+    def _is_openvla_proposal(proposal: IntentProposal) -> bool:
+        """Return True when proposal metadata indicates OpenVLA trajectory."""
+        meta = proposal.metadata or {}
+        proposer = str(meta.get("proposer", proposal.source or "")).lower()
+        primitive_type = str(meta.get("primitive_type", "")).lower()
+        return (
+            proposer == "openvla"
+            or proposal.source == "openvla"
+            or primitive_type == PrimitiveType.OPENVLA_TRAJECTORY.value
+        )
+
+    def _compile_openvla_plan(self, proposal: IntentProposal) -> List[Primitive]:
+        """
+        Build single primitive plan for OpenVLA trajectory execution.
+
+        Required metadata fields mirror the OpenVLA proposer output.
+        """
+        meta = dict(proposal.metadata or {})
+        required = ("delta_position", "delta_rotation", "gripper")
+        if any(key not in meta for key in required):
+            print("[COMPILER] Invalid OpenVLA metadata: missing trajectory fields")
+            self.last_validation_error = ErrorCode.UNKNOWN
+            return []
+
+        # Preserve the same workspace safety checks used by heuristic plans
+        # when the proposer provides a concrete target position.
+        target_pos = meta.get("target_pos_xyz")
+        if target_pos is not None:
+            target_xyz = np.array(target_pos, dtype=float)
+            if not self._validate_position(target_xyz):
+                print(f"[COMPILER] OpenVLA target at {target_xyz} outside workspace")
+                self.last_validation_error = ErrorCode.OUT_OF_BOUNDS
+                return []
+
+        meta.setdefault("proposer", "openvla")
+        meta.setdefault("primitive_type", PrimitiveType.OPENVLA_TRAJECTORY.value)
+        meta.setdefault("instruction", proposal.description)
+
+        return [
+            Primitive(
+                type=PrimitiveType.OPENVLA_TRAJECTORY,
+                metadata=meta,
+            )
+        ]
