@@ -241,3 +241,4 @@ def format_diagnostic_report(report: DiagnosticReport, title: str) -> str:
 
     lines.append("=" * 60)
     return "\n".join(lines)
+

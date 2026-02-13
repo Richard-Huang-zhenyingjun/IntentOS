@@ -1,0 +1,111 @@
+<!-- models/kuka_iiwa/model.xml -->
+<!-- KUKA IIWA 7-DOF arm in MuJoCo native format -->
+<!-- Reference: https://github.com/google-deepmind/mujoco_menagerie/tree/main/kuka_iiwa_14 -->
+<mujoco model="kuka_iiwa">
+  <compiler angle="radian" meshdir="meshes/" autolimits="true"/>
+
+  <option gravity="0 0 -9.81" timestep="0.002" integrator="implicitfast">
+    <flag contact="enable"/>
+  </option>
+
+  <default>
+    <joint damping="5.0" armature="0.1"/>
+    <geom condim="4" friction="1.0 0.005 0.001"/>
+    <motor ctrlrange="-87 87" ctrllimited="true"/>
+  </default>
+
+  <!--
+    IMPORTANT: You need to either:
+    1. Export meshes from your URDF (extract .stl/.obj files into models/kuka_iiwa/meshes/)
+    2. Use primitive geoms (cylinders/capsules) as collision shapes
+    3. Pull from mujoco_menagerie: https://github.com/google-deepmind/mujoco_menagerie
+
+    If your URDF references mesh files, copy them to models/kuka_iiwa/meshes/
+    If it uses primitive shapes, translate them to MuJoCo geom types.
+
+    Below is a skeleton — fill in actual dimensions from your URDF.
+  -->
+
+  <worldbody>
+    <light directional="true" pos="0 0 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.8 0.8 0.8 1"/>
+
+    <!-- Table -->
+    <body name="table" pos="0.5 0 0.4">
+      <geom type="box" size="0.4 0.3 0.02" rgba="0.6 0.4 0.2 1" mass="10"/>
+    </body>
+
+    <!-- KUKA IIWA Base -->
+    <body name="base" pos="0 0 0.36">
+      <geom type="cylinder" size="0.08 0.05" rgba="0.3 0.3 0.3 1"/>
+
+      <!-- Joint 1: A1 (base rotation) -->
+      <body name="link1" pos="0 0 0.1575">
+        <joint name="joint_a1" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.2025" size="0.07" rgba="0.9 0.6 0.2 1"/>
+
+        <!-- Joint 2: A2 -->
+        <body name="link2" pos="0 0 0.2025">
+          <joint name="joint_a2" type="hinge" axis="0 1 0" range="-2.0944 2.0944"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.2045" size="0.07" rgba="0.9 0.6 0.2 1"/>
+
+          <!-- Joint 3: A3 -->
+          <body name="link3" pos="0 0 0.2045">
+            <joint name="joint_a3" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+            <geom type="capsule" fromto="0 0 0 0 0 0.2155" size="0.06" rgba="0.9 0.6 0.2 1"/>
+
+            <!-- Joint 4: A4 -->
+            <body name="link4" pos="0 0 0.2155">
+              <joint name="joint_a4" type="hinge" axis="0 -1 0" range="-2.0944 2.0944"/>
+              <geom type="capsule" fromto="0 0 0 0 0 0.1845" size="0.06" rgba="0.9 0.6 0.2 1"/>
+
+              <!-- Joint 5: A5 -->
+              <body name="link5" pos="0 0 0.1845">
+                <joint name="joint_a5" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+                <geom type="capsule" fromto="0 0 0 0 0 0.2155" size="0.05" rgba="0.9 0.6 0.2 1"/>
+
+                <!-- Joint 6: A6 -->
+                <body name="link6" pos="0 0 0.2155">
+                  <joint name="joint_a6" type="hinge" axis="0 1 0" range="-2.0944 2.0944"/>
+                  <geom type="capsule" fromto="0 0 0 0 0 0.081" size="0.04" rgba="0.9 0.6 0.2 1"/>
+
+                  <!-- Joint 7: A7 (wrist) -->
+                  <body name="link7" pos="0 0 0.081">
+                    <joint name="joint_a7" type="hinge" axis="0 0 1" range="-3.05433 3.05433"/>
+                    <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.3 1"/>
+
+                    <!-- End effector site (for IK / control target) -->
+                    <site name="end_effector" pos="0 0 0.045" size="0.01" rgba="1 0 0 1"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- Actuators: position-controlled joints -->
+  <actuator>
+    <position name="a1" joint="joint_a1" kp="500" ctrlrange="-2.96706 2.96706"/>
+    <position name="a2" joint="joint_a2" kp="500" ctrlrange="-2.0944 2.0944"/>
+    <position name="a3" joint="joint_a3" kp="500" ctrlrange="-2.96706 2.96706"/>
+    <position name="a4" joint="joint_a4" kp="500" ctrlrange="-2.0944 2.0944"/>
+    <position name="a5" joint="joint_a5" kp="500" ctrlrange="-2.96706 2.96706"/>
+    <position name="a6" joint="joint_a6" kp="500" ctrlrange="-2.0944 2.0944"/>
+    <position name="a7" joint="joint_a7" kp="500" ctrlrange="-3.05433 3.05433"/>
+  </actuator>
+
+  <!-- Sensors -->
+  <sensor>
+    <jointpos name="a1_pos" joint="joint_a1"/>
+    <jointpos name="a2_pos" joint="joint_a2"/>
+    <jointpos name="a3_pos" joint="joint_a3"/>
+    <jointpos name="a4_pos" joint="joint_a4"/>
+    <jointpos name="a5_pos" joint="joint_a5"/>
+    <jointpos name="a6_pos" joint="joint_a6"/>
+    <jointpos name="a7_pos" joint="joint_a7"/>
+    <framepos name="ee_pos" objtype="site" objname="end_effector"/>
+  </sensor>
+</mujoco>

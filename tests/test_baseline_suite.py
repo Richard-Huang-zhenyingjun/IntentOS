@@ -1,6 +1,7 @@
 import numpy as np
 import pybullet as p
 import pytest
+from types import SimpleNamespace
 
 from src.core.system_factory import build_system, load_config
 from src.input.filter import DecisionFilter
@@ -69,7 +70,6 @@ def _patch_deterministic_execution(orch):
     """
     controller = orch.executor.controller
     grasp = orch.executor.grasp
-    original_detach = grasp.detach
 
     def _update_fast(_current_state):
         if not controller.executing:
@@ -79,20 +79,58 @@ def _patch_deterministic_execution(orch):
         controller._settle_counter = 0
         return True
 
-    def _detach_and_drop():
-        held_id = grasp.attached_object_id
-        ok = original_detach()
-        if held_id is not None:
+    def _open_fast():
+        held_id = getattr(grasp, "attached_object_id", None)
+        if held_id is not None and getattr(grasp, "_mock_is_grasping", False):
             center = np.array(orch.world_artifacts.bin_zone_center, dtype=float)
             p.resetBasePositionAndOrientation(
                 held_id,
                 [float(center[0]), float(center[1]), float(center[2])],
                 [0, 0, 0, 1],
             )
-        return ok
+            grasp.attached_object_id = None
+        grasp._mock_is_grasping = False
+        grasp._mock_force = 0.0
+
+    def _close_fast(force=30.0):
+        held_id = None
+        try:
+            if orch.executor.active_plan and orch.executor.plan_index < len(orch.executor.active_plan):
+                held_id = orch.executor.active_plan[orch.executor.plan_index].object_id
+        except Exception:
+            held_id = None
+        if held_id is None:
+            held_id = orch.state_machine.target_id
+        grasp.attached_object_id = held_id
+        grasp._mock_is_grasping = True
+        grasp._mock_force = float(force)
+
+    def _is_motion_complete_fast():
+        return True
+
+    def _verify_grasp_fast():
+        return bool(getattr(grasp, "_mock_is_grasping", False))
+
+    def _get_state_fast():
+        is_grasping = bool(getattr(grasp, "_mock_is_grasping", False))
+        force = float(getattr(grasp, "_mock_force", 0.0))
+        return SimpleNamespace(
+            width=0.0 if is_grasping else 0.08,
+            force=force,
+            is_closed=is_grasping,
+            is_grasping=is_grasping,
+        )
+
+    def _get_grasp_quality_fast():
+        return 0.9 if getattr(grasp, "_mock_is_grasping", False) else 0.0
 
     controller.update = _update_fast
-    grasp.detach = _detach_and_drop
+    grasp.open = _open_fast
+    grasp.close = _close_fast
+    grasp.is_motion_complete = _is_motion_complete_fast
+    grasp.verify_grasp = _verify_grasp_fast
+    grasp.get_state = _get_state_fast
+    grasp.get_grasp_quality = _get_grasp_quality_fast
 
 
 def _run_baseline(seed: int, n_objects: int, auto_confirm_n: int) -> float:

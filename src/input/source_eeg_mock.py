@@ -114,3 +114,4 @@ class MockEEGSource(DecisionSourceBase):
         self._override_quality = quality
 
 
+

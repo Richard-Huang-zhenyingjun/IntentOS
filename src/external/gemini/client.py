@@ -151,3 +151,4 @@ class RealGeminiClient(GeminiClientBase):
         return self._init_error is None
 
 
+

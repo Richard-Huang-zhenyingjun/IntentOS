@@ -52,3 +52,4 @@ class IntentProposal:
     risk_flags: Optional[List[str]] = None
 
 
+

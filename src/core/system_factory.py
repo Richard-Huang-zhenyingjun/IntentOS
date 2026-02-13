@@ -15,6 +15,7 @@ from src.worlds.messy_table_world import build_messy_table
 from src.robot.simulator import RobotSimulator
 from src.robot.controller import RobotController
 from src.robot.grasp import GraspController
+from src.robot.joint_discovery import discover_gripper_joints
 
 # Week 5: Decision pipeline
 from src.input.pipeline import DecisionPipeline
@@ -62,7 +63,11 @@ def build_system(config: dict) -> Orchestrator:
     
     # 2. Robot controllers (created here, passed to executor)
     controller = RobotController(config, sim)
-    grasp = GraspController(sim)
+    gripper_joints = discover_gripper_joints(sim.robot_id)
+    if len(gripper_joints) < 2:
+        raise RuntimeError("Gripper joints not found in URDF - check gripper attachment")
+    print(f"[FACTORY] Gripper joints: {gripper_joints}")
+    grasp = GraspController(sim, config.get("gripper", {}))
     
     # 3. Scene summarizer (Week 3: extracted as class)
     scene_summarizer = SceneSummarizer(config)

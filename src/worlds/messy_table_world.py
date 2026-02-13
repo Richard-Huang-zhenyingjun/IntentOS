@@ -38,6 +38,13 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
         baseVisualShapeIndex=table_visual,
         basePosition=table_pos
     )
+    p.changeDynamics(
+        table_id,
+        -1,
+        lateralFriction=1.0,
+        spinningFriction=0.05,
+        rollingFriction=0.03,
+    )
     
     print(f"[WORLD] Created table at {table_pos}, top at z=0.6")
     
@@ -68,8 +75,8 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
                 break
             attempts += 1
         
-        # Create cube
-        size = 0.04  # 4cm cubes
+        # Create tuned cube (smaller/lighter with higher friction).
+        size = 0.03  # half extent -> 6cm cubes
         collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[size]*3)
         visual = p.createVisualShape(
             p.GEOM_BOX,
@@ -77,10 +84,20 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
             rgbaColor=[np.random.rand(), np.random.rand(), np.random.rand(), 1.0]
         )
         obj_id = p.createMultiBody(
-            baseMass=0.05,  # 50g
+            baseMass=0.08,  # 80g
             baseCollisionShapeIndex=collision,
             baseVisualShapeIndex=visual,
             basePosition=[x, y, spawn_z]
+        )
+        p.changeDynamics(
+            obj_id,
+            -1,
+            lateralFriction=1.5,
+            spinningFriction=0.1,
+            rollingFriction=0.05,
+            restitution=0.1,
+            contactStiffness=10000,
+            contactDamping=100,
         )
         object_ids.append(obj_id)
     

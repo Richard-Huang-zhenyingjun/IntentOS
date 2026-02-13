@@ -2,10 +2,12 @@
 
 import math
 import logging
+import time
 import numpy as np
 import pybullet as p
 from typing import Optional
 from src.robot.simulator import RobotSimulator, ArmState
+from src.planning.trajectory import TrajectoryInterpolator, Waypoint
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +43,25 @@ class RobotController:
         
         # Execution state (keep existing for backward compatibility)
         self.target_position: Optional[np.ndarray] = None
+        self._cmd_force = self.max_force
+        self._cmd_pos_gain = self.pos_gain
+        self._cmd_vel_gain = self.vel_gain
+        self._cmd_max_velocity = self.max_joint_velocity
+        self.trajectory_interpolator = TrajectoryInterpolator()
+        self._trajectory: Optional[list[Waypoint]] = None
+        self._trajectory_index = 0
+        self._trajectory_start_time = 0.0
         
         print(f"[CTRL] Initialized with {len(self.joint_indices)} joints")
         print(f"[CTRL] max_force={self.max_force}, tolerance={self.tolerance_rad}")
     
-    def move_to_position(self, target_xyz: np.ndarray):
-        """Start moving to target position (does NOT wait for completion)"""
+    def move_to_position(
+        self,
+        target_xyz: np.ndarray,
+        slow: bool = False,
+        velocity: float = 0.5,
+    ):
+        """Start moving to target position (does NOT wait for completion)."""
         # Compute IK
         ik_result = self._compute_ik(target_xyz)
         
@@ -62,11 +77,92 @@ class RobotController:
         
         self.executing = True
         self._settle_counter = 0
+        if slow:
+            self._cmd_force = min(self.max_force, 100.0)
+            self._cmd_pos_gain = min(self.pos_gain, 0.03)
+            self._cmd_vel_gain = min(self.vel_gain, 0.5)
+            self._cmd_max_velocity = max(0.01, float(velocity))
+        else:
+            self._cmd_force = self.max_force
+            self._cmd_pos_gain = self.pos_gain
+            self._cmd_vel_gain = self.vel_gain
+            self._cmd_max_velocity = self.max_joint_velocity
         
         # Keep backward compatibility
         self.target_position = target_xyz
         
         print(f"[CTRL] Started motion to {target_xyz}, target_joints={self.target_joints}")
+
+    def follow_trajectory(self, waypoints: list[Waypoint]) -> None:
+        """Start following a precomputed joint-space trajectory."""
+        self._trajectory = waypoints
+        self._trajectory_index = 0
+        self._trajectory_start_time = time.time()
+        self.executing = True
+        self.target_joints = None
+        self.target_position = None
+
+    def update_trajectory(self, current_state: ArmState) -> bool:
+        """Update trajectory execution; returns True when complete."""
+        if self._trajectory is None:
+            return False
+        if current_state is None:
+            return False
+
+        elapsed = time.time() - self._trajectory_start_time
+        prev_index = self._trajectory_index
+        while (
+            self._trajectory_index < len(self._trajectory)
+            and self._trajectory[self._trajectory_index].time <= elapsed
+        ):
+            self._trajectory_index += 1
+        if self._trajectory_index == prev_index:
+            # Keep deterministic progress in fast simulation/test loops.
+            self._trajectory_index += 1
+
+        if self._trajectory_index >= len(self._trajectory):
+            self._trajectory = None
+            self.executing = False
+            return True
+
+        waypoint = self._trajectory[self._trajectory_index]
+        try:
+            p.setJointMotorControlArray(
+                bodyIndex=self.sim.robot_id,
+                jointIndices=self.joint_indices,
+                controlMode=p.POSITION_CONTROL,
+                targetPositions=waypoint.joint_positions.tolist(),
+                forces=[100.0] * len(self.joint_indices),
+                positionGains=[0.05] * len(self.joint_indices),
+                velocityGains=[0.5] * len(self.joint_indices),
+            )
+        except Exception as exc:
+            logger.error("[CTRL] Trajectory update failed: %s", exc)
+            self._trajectory = None
+            self.executing = False
+            return False
+
+        return False
+
+    def move_to_position_smooth(self, target_cart: np.ndarray, duration: float = 2.0) -> None:
+        """Move to Cartesian target with smooth interpolated trajectory."""
+        current_cart = self.get_end_effector_position()
+        if current_cart is None:
+            self.move_to_position(target_cart)
+            return
+
+        timestep = 1.0 / 60.0
+        num_waypoints = max(2, int(duration / timestep))
+        interp = TrajectoryInterpolator(duration=duration, timestep=timestep)
+        waypoints = interp.interpolate_cartesian(
+            robot_id=self.sim.robot_id,
+            ee_link_index=self.ee_link_index,
+            joint_count=len(self.joint_indices),
+            start_cart=np.array(current_cart, dtype=float),
+            end_cart=np.array(target_cart, dtype=float),
+            num_waypoints=num_waypoints,
+        )
+        self.follow_trajectory(waypoints)
     
     def update(self, current_state: ArmState) -> bool:
         """
@@ -76,6 +172,10 @@ class RobotController:
             True if motion complete (settled)
             False if still executing OR not started OR failed
         """
+        # Trajectory mode
+        if self._trajectory is not None:
+            return self.update_trajectory(current_state)
+
         # Not executing → not complete
         if not self.executing:
             return False
@@ -91,15 +191,27 @@ class RobotController:
             return False
         
         # Apply motor control with forces
-        p.setJointMotorControlArray(
-            bodyIndex=self.sim.robot_id,
-            jointIndices=self.joint_indices,
-            controlMode=p.POSITION_CONTROL,
-            targetPositions=self.target_joints.tolist(),
-            forces=[self.max_force] * len(self.joint_indices),
-            positionGains=[self.pos_gain] * len(self.joint_indices),
-            velocityGains=[self.vel_gain] * len(self.joint_indices)
-        )
+        try:
+            p.setJointMotorControlArray(
+                bodyIndex=self.sim.robot_id,
+                jointIndices=self.joint_indices,
+                controlMode=p.POSITION_CONTROL,
+                targetPositions=self.target_joints.tolist(),
+                forces=[self._cmd_force] * len(self.joint_indices),
+                positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
+                maxVelocities=[self._cmd_max_velocity] * len(self.joint_indices),
+            )
+        except TypeError:
+            p.setJointMotorControlArray(
+                bodyIndex=self.sim.robot_id,
+                jointIndices=self.joint_indices,
+                controlMode=p.POSITION_CONTROL,
+                targetPositions=self.target_joints.tolist(),
+                forces=[self._cmd_force] * len(self.joint_indices),
+                positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
+            )
         
         # Compute error
         current_joints = np.array([current_state.joint_positions[i] for i in range(len(self.joint_indices))])
@@ -170,11 +282,21 @@ class RobotController:
         self.executing = False
         self.target_position = None
         self.target_joints = None
+        self._trajectory = None
+        self._trajectory_index = 0
+        self._trajectory_start_time = 0.0
         self._settle_counter = 0
     
     def is_executing(self) -> bool:
         """Check if motion is in progress."""
         return self.executing
+
+    def get_end_effector_position(self) -> Optional[np.ndarray]:
+        """Get current end-effector position."""
+        arm = self.sim.get_arm_state()
+        if arm is None:
+            return None
+        return arm.ee_position
 
     def check_divergence(self) -> bool:
         """Detect if physics has diverged (NaN positions, inf forces)."""

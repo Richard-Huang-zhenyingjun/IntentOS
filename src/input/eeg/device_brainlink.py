@@ -256,3 +256,4 @@ class BrainLinkDevice(EEGDeviceBase):
                 self._connected = False
 
 
+

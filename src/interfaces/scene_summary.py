@@ -57,3 +57,4 @@ class SceneSummary:
     eeg_quality: Optional[float] = None
 
 
+

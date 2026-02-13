@@ -271,3 +271,4 @@ print(f"[DEBUG] Keys after orchestrator: {keys_after}")
 **Fix:** Read keyboard events ONCE per frame and distribute to both orchestrator and demo script.
 
 
+

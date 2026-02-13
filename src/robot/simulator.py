@@ -10,7 +10,8 @@ from src.robot.joint_discovery import (
     get_revolute_joint_indices,
     get_joint_name_map,
     guess_end_effector_link,
-    print_joint_table
+    print_joint_table,
+    discover_gripper_joints,
 )
 
 
@@ -80,6 +81,10 @@ class RobotSimulator:
         print_joint_table(self.robot_id)
         print(f"[SIM] Discovered {len(self.joint_indices)} revolute joints: {self.joint_indices}")
         print(f"[SIM] End effector link index: {self.ee_link_index}")
+        gripper_joints = discover_gripper_joints(self.robot_id)
+        if gripper_joints:
+            print(f"[SIM] Discovered gripper joints: {gripper_joints}")
+            self._tune_gripper_dynamics(gripper_joints)
         
         # Reset arm to home position
         self._reset_arm_position()
@@ -105,6 +110,8 @@ class RobotSimulator:
         
         # Try multiple URDF paths
         urdf_paths = [
+            "models/kuka_iiwa/kuka_with_gripper.urdf",  # Local arm + gripper
+            "models/kuka_iiwa/model.urdf",              # Local arm copy
             "kuka_iiwa/model.urdf",                    # Standard PyBullet data
             "kuka_iiwa7/model.urdf",                   # Alternative name
             os.path.join(pybullet_data.getDataPath(), "kuka_iiwa/model.urdf"),
@@ -248,6 +255,48 @@ class RobotSimulator:
         
         print(f"[SIM]   ✓ Created simple cube (id={cube_id})")
         return cube_id
+
+    def _tune_gripper_dynamics(self, gripper_joints: dict[str, int]):
+        """Apply high-friction compliant contact tuning for gripper links."""
+        for joint_name, joint_idx in gripper_joints.items():
+            try:
+                p.changeDynamics(
+                    self.robot_id,
+                    joint_idx,
+                    lateralFriction=2.0,
+                    spinningFriction=0.1,
+                    rollingFriction=0.05,
+                    restitution=0.0,
+                    contactStiffness=100000,
+                    contactDamping=100,
+                )
+            except TypeError:
+                p.changeDynamics(
+                    self.robot_id,
+                    joint_idx,
+                    lateralFriction=2.0,
+                    spinningFriction=0.1,
+                    rollingFriction=0.05,
+                    restitution=0.0,
+                )
+            except Exception as exc:
+                print(f"[SIM] WARNING: gripper tuning failed for {joint_name}: {exc}")
+
+        # Gripper base contact tuning.
+        for i in range(p.getNumJoints(self.robot_id)):
+            info = p.getJointInfo(self.robot_id, i)
+            if info[1].decode("utf-8") == "gripper_attach":
+                try:
+                    p.changeDynamics(
+                        self.robot_id,
+                        i,
+                        lateralFriction=1.5,
+                        spinningFriction=0.05,
+                        rollingFriction=0.03,
+                    )
+                except Exception:
+                    pass
+                break
     
     def _reset_arm_position(self):
         """Reset arm to home position."""

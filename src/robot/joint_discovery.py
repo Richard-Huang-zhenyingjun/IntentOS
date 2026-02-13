@@ -1,7 +1,7 @@
 import pybullet as p
 
 def get_revolute_joint_indices(body_id: int) -> list[int]:
-    """Get indices of all revolute/prismatic joints (ignore fixed)"""
+    """Get indices of arm revolute joints (ignore fixed/prismatic gripper joints)."""
     revolute_indices = []
     num_joints = p.getNumJoints(body_id)
     
@@ -9,7 +9,7 @@ def get_revolute_joint_indices(body_id: int) -> list[int]:
         joint_info = p.getJointInfo(body_id, i)
         joint_type = joint_info[2]
         
-        if joint_type in [p.JOINT_REVOLUTE, p.JOINT_PRISMATIC]:
+        if joint_type == p.JOINT_REVOLUTE:
             revolute_indices.append(i)
     
     return revolute_indices
@@ -81,4 +81,27 @@ def print_joint_table(body_id: int):
     
     print("="*80 + "\n")
 
+
+def discover_gripper_joints(body_id: int) -> dict[str, int]:
+    """Find gripper finger joint indices (prismatic finger joints)."""
+    joints: dict[str, int] = {}
+    num_joints = p.getNumJoints(body_id)
+    for i in range(num_joints):
+        info = p.getJointInfo(body_id, i)
+        joint_name = info[1].decode("utf-8")
+        joint_type = info[2]
+        if "finger" in joint_name.lower() and joint_type == p.JOINT_PRISMATIC:
+            joints[joint_name] = i
+    return joints
+
+
+def get_gripper_link_index(body_id: int, link_name: str = "gripper_base") -> int:
+    """Return gripper link index by child-link name, or -1 if absent."""
+    num_joints = p.getNumJoints(body_id)
+    for i in range(num_joints):
+        info = p.getJointInfo(body_id, i)
+        child_link = info[12].decode("utf-8")
+        if link_name in child_link:
+            return i + 1
+    return -1
 

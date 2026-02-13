@@ -44,3 +44,4 @@ class EEGDeviceBase(ABC):
         pass
 
 
+

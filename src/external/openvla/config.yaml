@@ -1,0 +1,21 @@
+# OpenVLA Configuration
+model:
+  name: "openvla/openvla-7b"          # HuggingFace model ID
+  # Alternative: "openvla/openvla-7b-finetuned-bridge" for Bridge V2 tasks
+  device: "auto"                       # "auto", "cuda", "cpu"
+  torch_dtype: "bfloat16"             # "float32" for CPU, "bfloat16" for GPU
+  max_new_tokens: 512
+
+inference:
+  image_size: [224, 224]              # OpenVLA expected input size
+  temperature: 0.0                    # Deterministic inference
+  do_sample: false
+
+action_space:
+  # OpenVLA outputs 7-dim actions: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+  # These are DELTA end-effector commands, not absolute positions
+  dimensions: 7
+  # Action bounds (for safety clamping)
+  position_delta_max: 0.05            # Max 5cm per step
+  rotation_delta_max: 0.25            # Max ~14 degrees per step
+  gripper_threshold: 0.5              # >0.5 = open, <0.5 = close

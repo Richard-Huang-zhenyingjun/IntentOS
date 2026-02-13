@@ -9,6 +9,13 @@ debug:
 simulator:
   use_gui: true
 
+# Gripper parameters
+gripper:
+  max_width: 0.08
+  close_force: 30.0
+  grasp_threshold: 5.0
+  approach_offset: 0.05
+
 # Robot parameters
 robot:
   max_force: 400.0

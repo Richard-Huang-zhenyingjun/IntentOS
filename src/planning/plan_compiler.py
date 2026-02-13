@@ -142,7 +142,11 @@ class PlanCompiler(PlanCompilerBase):
             Primitive(
                 type=PrimitiveType.GRASP,
                 object_id=target_obj.object_id,
-                metadata={'step': 'grasp'}
+                metadata={
+                    'step': 'grasp',
+                    'object_id': target_obj.object_id,
+                    'object_position': target_xyz.tolist(),
+                }
             ),
             
             # 4. Lift object

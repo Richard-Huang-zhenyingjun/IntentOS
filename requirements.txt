@@ -2,6 +2,8 @@
 
 # Core dependencies
 pyyaml>=6.0
+mne>=1.5.0
+google-generativeai
 
 # Vision module dependencies (Week 1)
 opencv-python>=4.8.0
@@ -15,11 +17,21 @@ ultralytics>=8.0.0  # YOLOv8 for real object recognition (80 classes)
 Pillow>=10.0.0  # For image conversion (PIL)
 
 # Testing (optional)
-pytest>=7.0.0
+pytest>=7.4.0
+pytest-cov>=4.1.0
 
 # Robotics simulation (Week 1+ Robotics)
 pybullet>=3.2.5  # Physics simulation for robotic arm
 scipy>=1.11.0  # For rotation/transformation math
+mujoco>=3.0.0
+dm-control
+
+# Week 1 additions — OpenVLA
+torch>=2.0.0
+torchvision
+transformers>=4.30.0
+timm
+accelerate
 
 # Week 7: BrainLink Lite serial communication
 pyserial>=3.5

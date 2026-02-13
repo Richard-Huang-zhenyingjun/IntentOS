@@ -117,3 +117,4 @@ class FakeGeminiClient(GeminiClientBase):
         self._available = True
 
 
+

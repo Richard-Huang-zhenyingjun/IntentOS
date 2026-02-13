@@ -11,3 +11,4 @@ class WorldArtifacts:
     seed: int
 
 
+

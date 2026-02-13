@@ -175,3 +175,4 @@ proposers:
 4. **Week 6**: MNE/EEG input integration
 
 
+

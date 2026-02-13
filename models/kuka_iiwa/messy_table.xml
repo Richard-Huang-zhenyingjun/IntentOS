@@ -1,0 +1,131 @@
+<mujoco model="messy_table">
+  <compiler angle="radian" autolimits="true"/>
+
+  <option gravity="0 0 -9.81" timestep="0.002" integrator="implicitfast">
+    <flag contact="enable"/>
+  </option>
+
+  <default>
+    <joint damping="5.0" armature="0.1"/>
+    <geom condim="4" friction="1.0 0.005 0.001"/>
+    <motor ctrlrange="-87 87" ctrllimited="true"/>
+
+    <default class="object">
+      <geom mass="0.08" friction="1.5 0.01 0.001" condim="4" rgba="1 0 0 1"/>
+      <joint damping="0.01"/>
+    </default>
+  </default>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.8 0.8 0.8" rgb2="0.6 0.6 0.6" width="512" height="512"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1"/>
+    <material name="wood" rgba="0.6 0.4 0.2 1" reflectance="0.05"/>
+  </asset>
+
+  <worldbody>
+    <light directional="true" pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <light directional="true" pos="1 1 2" dir="-0.5 -0.5 -1" diffuse="0.3 0.3 0.3"/>
+
+    <geom name="floor" type="plane" size="2 2 0.1" material="grid"/>
+
+    <body name="table" pos="0.5 0 0.35">
+      <geom name="table_top" type="box" size="0.35 0.25 0.02" material="wood" mass="20"/>
+      <geom type="cylinder" pos="-0.30 -0.20 -0.175" size="0.025 0.175" rgba="0.4 0.3 0.15 1"/>
+      <geom type="cylinder" pos="0.30 -0.20 -0.175" size="0.025 0.175" rgba="0.4 0.3 0.15 1"/>
+      <geom type="cylinder" pos="-0.30 0.20 -0.175" size="0.025 0.175" rgba="0.4 0.3 0.15 1"/>
+      <geom type="cylinder" pos="0.30 0.20 -0.175" size="0.025 0.175" rgba="0.4 0.3 0.15 1"/>
+    </body>
+
+    <body name="bin" pos="0.5 0.4 0.38">
+      <geom type="box" size="0.08 0.08 0.05" rgba="0.2 0.2 0.8 0.5" mass="0.5"/>
+    </body>
+
+    <camera name="overhead" pos="0.5 0 1.5" quat="1 0 0 0" fovy="45"/>
+    <camera name="front" pos="0.5 -1.0 0.8" xyaxes="1 0 0 0 0.5 1" fovy="45"/>
+
+    <body name="base" pos="0 0 0.36">
+      <geom type="cylinder" size="0.08 0.05" rgba="0.3 0.3 0.3 1"/>
+
+      <body name="link1" pos="0 0 0.1575">
+        <joint name="joint_a1" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.2025" size="0.07" rgba="0.9 0.6 0.2 1"/>
+
+        <body name="link2" pos="0 0 0.2025">
+          <joint name="joint_a2" type="hinge" axis="0 1 0" range="-2.0944 2.0944"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.2045" size="0.07" rgba="0.9 0.6 0.2 1"/>
+
+          <body name="link3" pos="0 0 0.2045">
+            <joint name="joint_a3" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+            <geom type="capsule" fromto="0 0 0 0 0 0.2155" size="0.06" rgba="0.9 0.6 0.2 1"/>
+
+            <body name="link4" pos="0 0 0.2155">
+              <joint name="joint_a4" type="hinge" axis="0 -1 0" range="-2.0944 2.0944"/>
+              <geom type="capsule" fromto="0 0 0 0 0 0.1845" size="0.06" rgba="0.9 0.6 0.2 1"/>
+
+              <body name="link5" pos="0 0 0.1845">
+                <joint name="joint_a5" type="hinge" axis="0 0 1" range="-2.96706 2.96706"/>
+                <geom type="capsule" fromto="0 0 0 0 0 0.2155" size="0.05" rgba="0.9 0.6 0.2 1"/>
+
+                <body name="link6" pos="0 0 0.2155">
+                  <joint name="joint_a6" type="hinge" axis="0 1 0" range="-2.0944 2.0944"/>
+                  <geom type="capsule" fromto="0 0 0 0 0 0.081" size="0.04" rgba="0.9 0.6 0.2 1"/>
+
+                  <body name="link7" pos="0 0 0.081">
+                    <joint name="joint_a7" type="hinge" axis="0 0 1" range="-3.05433 3.05433"/>
+                    <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.3 1"/>
+                    <site name="end_effector" pos="0 0 0.045" size="0.01" rgba="1 0 0 1"/>
+                    <camera name="wrist" pos="0 0 0.045" fovy="60"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <body name="object_0" pos="0.4 -0.1 0.40">
+      <freejoint name="obj0_free"/>
+      <geom class="object" type="box" size="0.025 0.025 0.025" rgba="1.0 0.2 0.2 1"/>
+    </body>
+
+    <body name="object_1" pos="0.55 0.05 0.40">
+      <freejoint name="obj1_free"/>
+      <geom class="object" type="box" size="0.025 0.025 0.025" rgba="0.2 0.8 0.2 1"/>
+    </body>
+
+    <body name="object_2" pos="0.45 0.15 0.40">
+      <freejoint name="obj2_free"/>
+      <geom class="object" type="box" size="0.025 0.025 0.025" rgba="0.2 0.2 1.0 1"/>
+    </body>
+
+    <body name="object_3" pos="0.6 -0.05 0.40">
+      <freejoint name="obj3_free"/>
+      <geom class="object" type="cylinder" size="0.02 0.03" rgba="1.0 1.0 0.2 1"/>
+    </body>
+
+    <body name="object_4" pos="0.35 0.0 0.40">
+      <freejoint name="obj4_free"/>
+      <geom class="object" type="sphere" size="0.025" rgba="0.8 0.2 0.8 1"/>
+    </body>
+
+    <body name="object_5" pos="0.5 -0.15 0.40">
+      <freejoint name="obj5_free"/>
+      <geom class="object" type="box" size="0.02 0.03 0.02" rgba="0.2 0.8 0.8 1"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="a1" joint="joint_a1" kp="500"/>
+    <position name="a2" joint="joint_a2" kp="500"/>
+    <position name="a3" joint="joint_a3" kp="500"/>
+    <position name="a4" joint="joint_a4" kp="500"/>
+    <position name="a5" joint="joint_a5" kp="500"/>
+    <position name="a6" joint="joint_a6" kp="500"/>
+    <position name="a7" joint="joint_a7" kp="500"/>
+  </actuator>
+
+  <sensor>
+    <framepos name="ee_pos" objtype="site" objname="end_effector"/>
+  </sensor>
+</mujoco>

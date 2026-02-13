@@ -25,3 +25,4 @@ class GeminiRawResponse:
         return self.raw_text[:max_chars] + f"... [TRUNCATED, total={len(self.raw_text)}]"
 
 
+

@@ -134,3 +134,4 @@ class SceneSummarizer:
         return min(1.0, bbox_area / max_area)
 
 
+

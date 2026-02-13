@@ -1,91 +1,94 @@
-"""Grasp controller - attach/detach with state tracking."""
+"""Compatibility wrapper around physical gripper controller."""
 
-import pybullet as p
 from typing import Optional
 from src.robot.simulator import RobotSimulator
+from src.robot.joint_discovery import discover_gripper_joints
+from src.robot.gripper import GripperController, GripperState
 
 
 class GraspController:
-    """Manage object attachment with clear state tracking."""
-    
-    def __init__(self, sim: RobotSimulator):
+    """Deprecated compatibility layer backed by physical finger joints."""
+
+    def __init__(self, sim: RobotSimulator, gripper_cfg: Optional[dict] = None):
         self.sim = sim
-        
-        # Grasp state
+        gripper_cfg = gripper_cfg or {}
         self.holding = False
         self.attached_object_id: Optional[int] = None
-        self.constraint_id: Optional[int] = None
-    
+        self.gripper: Optional[GripperController] = None
+
+        joints = discover_gripper_joints(sim.robot_id)
+        left = joints.get("left_finger_joint")
+        right = joints.get("right_finger_joint")
+        if left is not None and right is not None:
+            self.gripper = GripperController(
+                robot_id=sim.robot_id,
+                left_finger_joint=left,
+                right_finger_joint=right,
+                max_width=float(gripper_cfg.get("max_width", 0.08)),
+                close_force=float(gripper_cfg.get("close_force", 30.0)),
+                grasp_force_threshold=float(gripper_cfg.get("grasp_threshold", 5.0)),
+            )
+            self.gripper.open()
+            print(f"[GRASP] Physical gripper enabled (L={left}, R={right})")
+        else:
+            print("[GRASP] WARNING: Gripper joints not found; physical grasp unavailable")
+
     def attach(self, object_id: int) -> bool:
-        """Attach object to end effector.
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        if self.holding:
-            print(f"[GRASP] Already holding object {self.attached_object_id}")
+        """Legacy alias: close fingers and mark pending attached object."""
+        if self.gripper is None:
             return False
-        
         if not self.sim.is_valid_object(object_id):
             print(f"[GRASP] Invalid object {object_id}")
             return False
-        
-        try:
-            # Create fixed constraint
-            self.constraint_id = p.createConstraint(
-                parentBodyUniqueId=self.sim.robot_id,
-                parentLinkIndex=self.sim.ee_link_index,
-                childBodyUniqueId=object_id,
-                childLinkIndex=-1,
-                jointType=p.JOINT_FIXED,
-                jointAxis=[0, 0, 0],
-                parentFramePosition=[0, 0, 0],
-                childFramePosition=[0, 0, 0]
-            )
-            
-            self.holding = True
-            self.attached_object_id = object_id
-            print(f"[GRASP] ✓ Attached object {object_id}")
-            return True
-            
-        except Exception as e:
-            print(f"[GRASP] Attach failed: {e}")
-            return False
-    
-    def detach(self) -> bool:
-        """Detach currently held object.
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.holding:
-            print("[GRASP] Not holding anything")
-            return False
-        
-        try:
-            if self.constraint_id is not None:
-                p.removeConstraint(self.constraint_id)
-            
-            print(f"[GRASP] ✓ Detached object {self.attached_object_id}")
-            
-            self.holding = False
-            self.attached_object_id = None
-            self.constraint_id = None
-            return True
-            
-        except Exception as e:
-            print(f"[GRASP] Detach failed: {e}")
-            # Force clear state even if constraint removal failed
-            self.holding = False
-            self.attached_object_id = None
-            self.constraint_id = None
-            return False
-    
-    def is_holding(self) -> bool:
-        """Check if holding an object."""
-        return self.holding
-    
-    def get_attached_id(self) -> Optional[int]:
-        """Get ID of attached object, or None."""
-        return self.attached_object_id if self.holding else None
+        self.close()
+        self.holding = False
+        self.attached_object_id = object_id
+        print("[GRASP] Close command issued")
+        return True
 
+    def detach(self) -> bool:
+        """Legacy alias: open fingers and clear attached object."""
+        if self.gripper is None:
+            return False
+        self.open()
+        self.holding = False
+        self.attached_object_id = None
+        return True
+
+    def open(self) -> None:
+        if self.gripper is not None:
+            self.gripper.open()
+
+    def close(self, force: Optional[float] = None) -> None:
+        if self.gripper is not None:
+            self.gripper.close(force=force)
+
+    def is_motion_complete(self) -> bool:
+        if self.gripper is None:
+            return True
+        return self.gripper.is_motion_complete()
+
+    def verify_grasp(self) -> bool:
+        if self.gripper is None:
+            return False
+        return self.gripper.verify_grasp()
+
+    def get_state(self) -> GripperState:
+        if self.gripper is None:
+            return GripperState(width=0.0, force=0.0, is_closed=False, is_grasping=False)
+        return self.gripper.get_state()
+
+    def get_grasp_quality(self) -> float:
+        if self.gripper is None:
+            return 0.0
+        return self.gripper.get_grasp_quality()
+
+    def is_holding(self) -> bool:
+        if self.gripper is not None:
+            self.holding = self.gripper.verify_grasp()
+            if not self.holding:
+                self.attached_object_id = None
+        return self.holding
+
+    def get_attached_id(self) -> Optional[int]:
+        return self.attached_object_id if self.is_holding() else None

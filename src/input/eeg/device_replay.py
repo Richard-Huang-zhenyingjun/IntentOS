@@ -147,3 +147,4 @@ class ReplayDevice(EEGDeviceBase):
         self._running = False
 
 
+
