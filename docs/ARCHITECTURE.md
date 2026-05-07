@@ -1,53 +1,71 @@
-# Architecture — Intent-Authorized Robotic Manipulation System
+# IntentOS Architecture
 
-## Philosophy
+## Three Layers
 
-`SELECT → PROPOSE → CONFIRM → EXECUTE`
+### Intent Kernel (Phase 2 - unchanged)
 
-The system keeps intent selection and action execution explicitly separated, with authorization checks at execution time.
+- FSM: IDLE -> AWAITING_CONFIRM -> EXECUTING -> DONE
+- Authorization gate: token required per execution
+- InvariantChecker: false_executions == 0
+- EEG/keyboard -> DecisionPipeline -> DecisionFilter -> Orchestrator
 
-## Tier Structure
+### Orchestration Layer (Phase 3)
 
-1. `src/interfaces/` (contracts only)
-- Frozen dataclasses, interface protocols, and abstract contracts.
-- Must not import concrete runtime modules.
+- Planner: LLM -> validate -> repair -> heuristic fallback
+- World model: heuristic risk estimator
+- Checkpoint planner: segment graph by uncertainty + policy
+- Proposal engine: human-readable summaries
+- Attention budget: rate-limited interruption
+- Recovery engine: retry / replan / escalate
 
-2. Core orchestration layer (`src/core/`, `src/execution/`)
-- Orchestrator, authorization, trust logic, execution flow, state machine.
-- Depends on interfaces and injected collaborators, not provider-specific concrete implementations.
+### Agent Layer
 
-3. Adapter/integration layer (`src/input/`, `src/intelligence/`, `src/robot/`, `src/worlds/`, `src/external/`)
-- Concrete IO, planners/proposers, simulator/world adapters, external services (Gemini/EEG).
-- Wired together by `src/core/system_factory.py`.
-
-## Safety Invariants
-
-1. `false_executions == 0`
-2. No network calls during `EXECUTING`
-3. Tier-1 style boundary: core logic relies on interface contracts and injected dependencies, not direct external provider imports
+- AgentBase: execute, can_execute, get_state, emergency_stop
+- ArmAgent: wraps Phase 2 PrimitiveExecutor
+- SimAgent: simulated second agent for multi-agent testing
+- AgentCoordinator: resource conflicts, spatial zones, parallel dispatch
 
 ## Data Flow
 
-1. Input sources (`KeyboardSource`, EEG source, or test source) produce raw decision signals.
-2. `DecisionRouter` merges source signals per policy.
-3. `DecisionFilter` enforces debounce/quality/hold rules.
-4. `DecisionPipeline.tick()` returns a `DecisionFrame` to `Orchestrator.step()`.
-5. Orchestrator updates state machine (`IDLE/SELECTING/CONFIRMING/EXECUTING/...`).
-6. On confirm, authorization token is issued and plan compilation starts.
-7. `PrimitiveExecutor.tick()` advances primitive execution.
-8. Trust/authorization/event streams are updated and emitted through `EventEmitter`.
-9. UI snapshot is produced for overlay and diagnostics.
+```text
+Goal string
+-> AmbiguityResolver (if confidence < 0.7)
+-> IntentPlanner.plan()
+-> LLM call (or heuristic fallback)
+-> TaskGraph validation
+-> WorldModel.annotate_graph()
+-> ExecutionHistory.annotate_graph()
+-> CheckpointPlanner.segment()
+-> ProposalEngine.propose()
+-> AttentionBudget.can_interrupt()
+-> ExecutionKernel.submit_proposal()
+-> Phase 2 presents to human
+-> Human confirms (EEG or keyboard)
+-> ScopedExecutionToken issued
+-> AgentCoordinator.execute_segment()
+-> AgentBase.execute(action, token) per node
+-> ExecutionHistory.record()
+-> SystemMemory.record_object_action()
+-> RecoveryEngine (on failure)
+-> InvariantChecker.assert_invariant()
+```
 
-## Testing Strategy
+## Uncertainty Model
 
-- Unit tests:
-  - Router/filter invariants (`tests/test_decision_router.py`, `tests/test_decision_filter.py`)
-  - Auth/trust/token guarantees (`tests/test_authorization_token.py`, `tests/test_trust_engine.py`)
-- Integration tests:
-  - Clean-table orchestration and confirm-gate behavior (`tests/test_clean_table_integration.py`)
-  - System assembly/wiring (`tests/test_system_factory.py`)
-- Safety tests:
-  - False execution invariant and execution gate checks (`tests/test_core_safety.py`, `tests/test_false_executions_invariant.py`)
-- Robustness/stress tests:
-  - Repeatability and long-running stability (`tests/test_repeatability_seeds.py`, `tests/test_long_running_stability.py`)
-  - Fault injection recovery behavior (`tests/test_fault_injection.py`)
+Three signals, weighted combination:
+
+- `perception_confidence` (0.35 weight) - vision YOLO score
+- `execution_history_rate` (0.35 weight) - from ExecutionHistory
+- `simulation_risk` (0.30 weight) - from WorldModel
+
+Thresholds:
+
+- combined < 0.2 -> execute silently
+- 0.2-0.5 -> note in proposal, no interrupt
+- 0.5-0.7 -> checkpoint boundary
+- 0.7-0.85 -> always confirm
+- > 0.85 -> abort plan
+
+## Sacred Files (Never Modify)
+
+See SACRED.md for the complete list.

@@ -1,21 +1,20 @@
 """
-Replay device — reads recorded CSV and feeds samples at original timing.
+Replay EEG source — reads recorded CSV samples.
 Enables deterministic testing without hardware.
 """
 import csv
 import time
-import threading
 import logging
 import numpy as np
 from pathlib import Path
 from typing import Callable, Optional
-from src.input.eeg.device_base import EEGDeviceBase
-from src.input.eeg.types import EEGSample
+
+from src.input.eeg.eeg_source import EEGSample, EEGSource
 
 logger = logging.getLogger(__name__)
 
 
-class ReplayDevice(EEGDeviceBase):
+class ReplayDevice(EEGSource):
     """
     Replays recorded EEG session from CSV file.
     
@@ -34,52 +33,74 @@ class ReplayDevice(EEGDeviceBase):
         self.filepath = Path(filepath)
         self.real_time = real_time
         self._callback: Optional[Callable] = None
-        self._thread: Optional[threading.Thread] = None
-        self._running = False
+        self._connected = False
         self._sfreq = 512.0  # Will be estimated from data
         self._samples_fed = 0
-    
-    def start(self):
-        """Begin replaying data"""
+        self._samples: list[EEGSample] = []
+        self._cursor = 0
+        self._start_wall_time = 0.0
+        self._start_sample_time = 0.0
+
+    def connect(self) -> bool:
+        """Load recording and prepare replay."""
         if not self.filepath.exists():
             raise FileNotFoundError(f"Recording not found: {self.filepath}")
-        
-        self._running = True
-        
-        if self.real_time:
-            self._thread = threading.Thread(target=self._replay_realtime, daemon=True)
-            self._thread.start()
-        else:
-            self._replay_instant()
-    
-    def stop(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=2.0)
-    
+        self._samples = self._load_csv()
+        self._cursor = 0
+        self._connected = True
+        self._start_wall_time = time.time()
+        self._start_sample_time = self._samples[0].timestamp if self._samples else 0.0
+        return True
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    @property
     def is_connected(self) -> bool:
-        return self._running
-    
+        return self._connected
+
+    @property
+    def sample_rate_hz(self) -> float:
+        return self._sfreq
+
+    @property
+    def n_channels(self) -> int:
+        return 1
+
     def set_callback(self, callback: Callable[[EEGSample], None]):
         self._callback = callback
-    
+
+    def start(self) -> None:
+        """Legacy callback compatibility for collection scripts."""
+        self.connect()
+        while self.is_connected:
+            sample = self.read_sample()
+            if sample is None:
+                time.sleep(0.001)
+                continue
+            if self._callback:
+                self._callback(sample)
+
+    def stop(self) -> None:
+        self.disconnect()
+
     def get_sfreq(self) -> float:
         return self._sfreq
-    
-    def _load_csv(self):
-        """Load CSV into arrays"""
-        timestamps = []
+
+    def _load_csv(self) -> list[EEGSample]:
+        """Load CSV into sample objects."""
+        timestamps_ms = []
         values = []
-        
+
         with open(self.filepath, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                timestamps.append(float(row['timestamp_ms']))
+                timestamps_ms.append(float(row['timestamp_ms']))
                 values.append(float(row['value']))
-        
-        timestamps = np.array(timestamps)
+
+        timestamps = np.array(timestamps_ms, dtype=np.float64)
         values = np.array(values)
-        
+
         # Estimate sfreq from timestamps
         if len(timestamps) > 1:
             dt_ms = np.median(np.diff(timestamps))
@@ -91,60 +112,34 @@ class ReplayDevice(EEGDeviceBase):
             f"estimated sfreq={self._sfreq:.1f} Hz, "
             f"duration={timestamps[-1] - timestamps[0]:.0f} ms"
         )
-        
-        return timestamps, values
-    
-    def _replay_instant(self):
-        """Feed all data immediately (for tests)"""
-        timestamps, values = self._load_csv()
-        
-        for i in range(len(values)):
-            if not self._running:
-                break
-            if self._callback:
-                sample = EEGSample(
-                    timestamp_ms=timestamps[i],
-                    value=values[i],
-                    channel=0,
-                    valid=True,
-                )
-                self._callback(sample)
-                self._samples_fed += 1
-        
-        self._running = False
-    
-    def _replay_realtime(self):
-        """Feed data at original timing (for demos)"""
-        timestamps, values = self._load_csv()
-        
-        if len(timestamps) == 0:
-            self._running = False
-            return
-        
-        start_real = time.time()
-        start_recording = timestamps[0] / 1000.0
-        
-        for i in range(len(values)):
-            if not self._running:
-                break
-            
-            # Wait until real-time matches recording time
-            target_real = start_real + (timestamps[i] / 1000.0 - start_recording)
-            now = time.time()
-            if target_real > now:
-                time.sleep(target_real - now)
-            
-            if self._callback:
-                sample = EEGSample(
-                    timestamp_ms=timestamps[i],
-                    value=values[i],
-                    channel=0,
-                    valid=True,
-                )
-                self._callback(sample)
-                self._samples_fed += 1
-        
-        self._running = False
 
+        return [
+            EEGSample(
+                channels=np.array([values[i]], dtype=np.float64),
+                timestamp=timestamps[i] / 1000.0,
+                quality=1.0,
+                source="replay",
+                label="replay",
+            )
+            for i in range(len(values))
+        ]
+
+    def read_sample(self) -> Optional[EEGSample]:
+        if not self._connected or self._cursor >= len(self._samples):
+            self._connected = False
+            return None
+
+        sample = self._samples[self._cursor]
+        if self.real_time:
+            elapsed = time.time() - self._start_wall_time
+            sample_elapsed = sample.timestamp - self._start_sample_time
+            if sample_elapsed > elapsed:
+                return None
+
+        self._cursor += 1
+        self._samples_fed += 1
+        if self._cursor >= len(self._samples):
+            self._connected = False
+        return sample
 
 

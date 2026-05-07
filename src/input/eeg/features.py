@@ -15,6 +15,69 @@ from src.input.eeg.types import EEGWindow, EEGFeatures
 logger = logging.getLogger(__name__)
 
 
+FEATURE_VECTOR_FIELDS = [
+    "rms",
+    "peak_amplitude",
+    "bandpower_delta",
+    "bandpower_theta",
+    "bandpower_alpha",
+    "bandpower_beta",
+    "line_noise_ratio",
+    "clipping_fraction",
+    "dropout_fraction",
+    "spike_count",
+    "max_spike_zscore",
+    "quality",
+]
+
+
+def extract_features(samples, config: dict | None = None) -> np.ndarray:
+    """
+    Canonical vector feature extractor for EEGSample windows.
+
+    This wraps FeatureExtractor.extract so offline training and live inference
+    share the same feature definition.
+    """
+    samples = list(samples)
+    if not samples:
+        return np.zeros(len(FEATURE_VECTOR_FIELDS), dtype=np.float64)
+
+    timestamps_ms = np.array([float(s.timestamp_ms) for s in samples], dtype=np.float64)
+    data = np.array([float(s.value) for s in samples], dtype=np.float64)
+    sfreq = _estimate_sfreq(timestamps_ms, config)
+    expected = max(1, int(round((timestamps_ms[-1] - timestamps_ms[0]) / 1000.0 * sfreq)) + 1)
+    dropout_fraction = max(0.0, 1.0 - (len(samples) / max(expected, len(samples), 1)))
+
+    window = EEGWindow(
+        data=data,
+        sfreq=sfreq,
+        start_time_ms=float(timestamps_ms[0]),
+        end_time_ms=float(timestamps_ms[-1]),
+        n_raw_samples=len(samples),
+        dropout_fraction=dropout_fraction,
+        is_valid=True,
+    )
+    features = FeatureExtractor(config or {}).extract(window)
+    return eeg_features_to_vector(features)
+
+
+def eeg_features_to_vector(features: EEGFeatures) -> np.ndarray:
+    """Convert EEGFeatures into the stable classifier feature vector."""
+    return np.array(
+        [float(getattr(features, field_name)) for field_name in FEATURE_VECTOR_FIELDS],
+        dtype=np.float64,
+    )
+
+
+def _estimate_sfreq(timestamps_ms: np.ndarray, config: dict | None) -> float:
+    if len(timestamps_ms) > 1:
+        diffs = np.diff(timestamps_ms)
+        diffs = diffs[diffs > 0]
+        if len(diffs):
+            return float(1000.0 / np.median(diffs))
+    return float((config or {}).get("eeg", {}).get("expected_sfreq", 512.0))
+
+
 class FeatureExtractor:
     """
     Extracts features and computes quality score from preprocessed EEG window.
@@ -50,7 +113,7 @@ class FeatureExtractor:
         Returns EEGFeatures with quality in [0, 1].
         Never raises exceptions — returns zero-quality on any error.
         """
-        if not window.is_valid or len(window.data) < 10:
+        if not window.is_valid or len(window.data) < 2:
             return EEGFeatures(quality=0.0, dropout_fraction=window.dropout_fraction)
         
         try:
@@ -217,6 +280,4 @@ class FeatureExtractor:
             quality -= self.noise_penalty
         
         return float(np.clip(quality, 0.0, 1.0))
-
-
 

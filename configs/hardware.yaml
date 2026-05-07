@@ -1,0 +1,18 @@
+hardware:
+  backend: simulator         # simulator | hardware - NEVER change this default
+  real:
+    port: /dev/tty.usbserial-0001
+    baud: 115200
+    arduino_reset_delay_s: 2.0
+    command_delay_s: 0.05
+  joint_limits:
+    # Conservative safe ranges in degrees.
+    # Update after query_limits() from firmware.
+    - [-90, 90]     # joint 0: base
+    - [-45, 90]     # joint 1: shoulder
+    - [-90, 45]     # joint 2: elbow
+    - [-90, 90]     # joint 3: wrist pitch
+    - [-180, 180]   # joint 4: wrist roll
+    - [0, 80]       # joint 5: gripper
+  max_step_deg: 15.0
+  dry_run: false

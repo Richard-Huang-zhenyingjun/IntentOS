@@ -60,7 +60,7 @@ def test_replay_produces_decisions(fixture_path, config):
         pytest.skip("MNE not installed")
     
     device = ReplayDevice(fixture_path, real_time=False)
-    source = EEGDecisionSource(device=device, config=config)
+    source = EEGDecisionSource(source=device, config=config)
     
     source.start()
     
@@ -87,7 +87,7 @@ def test_replay_quality_varies(fixture_path, config):
         pytest.skip("MNE not installed")
     
     device = ReplayDevice(fixture_path, real_time=False)
-    source = EEGDecisionSource(device=device, config=config)
+    source = EEGDecisionSource(source=device, config=config)
     
     source.start()
     
@@ -103,6 +103,5 @@ def test_replay_quality_varies(fixture_path, config):
     unique_qualities = set(round(q, 2) for q in qualities)
     # At minimum, there should be some variation
     assert len(unique_qualities) >= 1  # Relaxed: at least quality was computed
-
 
 

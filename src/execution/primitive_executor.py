@@ -35,11 +35,14 @@ class PrimitiveExecutor:
         grasp: GraspController,
         action_translator: Optional[Any] = None,
         authorization_manager: Optional[Any] = None,
+        hardware_bridge: Optional[Any] = None,
     ):
         self.controller = controller
         self.grasp = grasp
         self.action_translator = action_translator
         self.authorization_manager = authorization_manager
+        self._hardware_bridge = hardware_bridge
+        self.hardware_bridge = hardware_bridge  # Backward-compatible public alias.
         
         # Execution state
         self.active_plan: List[Primitive] = []
@@ -514,6 +517,22 @@ class PrimitiveExecutor:
             f"(ik_error={translated.ik_error:.4f}m, token={token_id})"
         )
 
+        try:
+            used_bridge = self._apply_joints(joint_targets)
+        except Exception as exc:
+            print(f"[OPENVLA] Hardware bridge error: {exc}, token={token_id}")
+            self.status = ExecutorStatus.FAILED
+            self.last_error_code = "openvla_hardware_bridge_error"
+            return False
+
+        if used_bridge:
+            self._invariant_checker.record_execution_attempt(
+                has_valid_token=True,
+                executed=True,
+                token_id=str(token_id or ""),
+            )
+            return True
+
         if hasattr(self.controller, "move_to_joint_positions"):
             converged = bool(self.controller.move_to_joint_positions(joint_targets))
             self._invariant_checker.record_execution_attempt(
@@ -542,6 +561,18 @@ class PrimitiveExecutor:
         self.status = ExecutorStatus.FAILED
         self.last_error_code = "openvla_controller_api_missing"
         return False
+
+    def _apply_joints(self, joint_positions: np.ndarray) -> bool:
+        """
+        Apply translated joint targets through the hardware bridge when present.
+
+        Returns True when HardwareBridge handled the command. Returns False for
+        legacy controller fallback paths used by the default PyBullet simulator.
+        """
+        if self._hardware_bridge is None:
+            return False
+        self._hardware_bridge.execute(joint_positions)
+        return True
 
     @property
     def invariant_summary(self) -> dict:

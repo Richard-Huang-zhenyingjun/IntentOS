@@ -1,0 +1,12 @@
+# Phase 2B.5 hardware bridge configuration.
+# Joint limits are radians and are applied before serial commands are emitted.
+# Real hardware remains inactive unless configs/default.yaml sets hardware.backend: "real".
+
+joint_limits_rad:
+  - [-3.1416, 3.1416]
+  - [-2.6179, 2.6179]
+  - [-3.1416, 3.1416]
+  - [-2.6179, 2.6179]
+  - [-3.1416, 3.1416]
+  - [-2.6179, 2.6179]
+  - [-3.1416, 3.1416]

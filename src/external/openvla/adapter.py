@@ -1,15 +1,16 @@
 """
-OpenVLA Model Adapter.
+OpenVLA Adapter — supports both real model and fake fallback.
 
-Wraps the OpenVLA model for use in the Intent-Authorized system.
-This is a STANDALONE wrapper — no dependencies on the intent system.
-Integration with ProposerRegistry happens in Week 2.
+Backend is controlled by config:
+  openvla.backend: "real" | "fake"
+
+The fake adapter is always available and remains the default in configs/default.yaml
+so simulation continues to work without GPU access.
 
 Usage:
-    adapter = OpenVLAAdapter()
+    adapter = OpenVLAAdapter(backend="fake")
     adapter.load_model()
     action = adapter.predict("pick up the red cup", image)
-    # action = np.array([dx, dy, dz, droll, dpitch, dyaw, gripper])
 """
 from __future__ import annotations
 
@@ -37,14 +38,19 @@ class OpenVLAAction:
 
 class OpenVLAAdapter:
     """
-    Adapter for OpenVLA vision-language-action model.
+    Unified adapter for OpenVLA real and fake backends.
 
-    Handles model loading, image preprocessing, inference, and
-    action postprocessing. Designed to be used standalone for testing
-    (Week 1) and later wrapped by OpenVLAProposer (Week 2).
+    predict(instruction, image) -> OpenVLAAction with raw_action shape (7,)
+    [dx, dy, dz, droll, dpitch, dyaw, gripper_open]
     """
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        backend: str = "real",
+        device: Optional[str] = None,
+        dtype: Optional[str] = None,
+    ):
         if config_path is None:
             config_path = os.path.join(
                 os.path.dirname(__file__), "config.yaml"
@@ -57,14 +63,23 @@ class OpenVLAAdapter:
         self._processor = None
         self._is_loaded = False
         self._device = None
+        self._backend = backend
+        self._device_override = device
+        self._dtype_override = dtype
 
     def load_model(self) -> None:
         """
-        Load OpenVLA model from HuggingFace.
+        Load selected backend.
 
         First call downloads weights (~15GB for 7B model).
         Subsequent calls use cached weights.
         """
+        if self._backend == "fake":
+            self._is_loaded = True
+            self._device = "fake"
+            logger.info("OpenVLA fake backend ready")
+            return
+
         try:
             from transformers import AutoModelForVision2Seq, AutoProcessor
             import torch
@@ -74,12 +89,17 @@ class OpenVLAAdapter:
             ) from e
 
         model_name = self._config["model"]["name"]
-        device_str = self._config["model"]["device"]
-        dtype_str = self._config["model"]["torch_dtype"]
+        device_str = self._device_override or self._config["model"]["device"]
+        dtype_str = self._dtype_override or self._config["model"]["torch_dtype"]
 
         # Resolve device
         if device_str == "auto":
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                self._device = "cuda"
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                self._device = "mps"
+            else:
+                self._device = "cpu"
         else:
             self._device = device_str
 
@@ -103,7 +123,9 @@ class OpenVLAAdapter:
             model_name,
             torch_dtype=torch_dtype,
             trust_remote_code=True,
-        ).to(self._device)
+        )
+        self._model = self._model.to(self._device)
+        self._model.eval()
 
         self._is_loaded = True
         logger.info(f"OpenVLA model loaded successfully on {self._device}")
@@ -122,6 +144,10 @@ class OpenVLAAdapter:
             OpenVLAAction with delta EE commands and gripper state.
         """
         assert self._is_loaded, "Call load_model() first"
+
+        if self._backend == "fake" or self._model is None:
+            raw = self._predict_fake_array(instruction, image)
+            return self._wrap_action(raw, instruction, confidence=0.95)
 
         from PIL import Image
         import torch
@@ -152,13 +178,25 @@ class OpenVLAAdapter:
 
         # Safety clamp
         raw = self._clamp_action(raw)
+        return self._wrap_action(raw, instruction)
 
+    def _wrap_action(
+        self,
+        raw: np.ndarray,
+        instruction: str,
+        confidence: float = 1.0,
+    ) -> OpenVLAAction:
+        raw = np.asarray(raw, dtype=np.float64).flatten()
+        if raw.shape[0] < 7:
+            raw = np.pad(raw, (0, 7 - raw.shape[0]), constant_values=0.0)
+        raw = raw[:7]
         return OpenVLAAction(
             delta_position=raw[:3],
             delta_rotation=raw[3:6],
             gripper=float(raw[6]) if len(raw) > 6 else 1.0,
             raw_action=raw,
             instruction=instruction,
+            confidence=confidence,
         )
 
     def predict_batch(
@@ -179,6 +217,18 @@ class OpenVLAAdapter:
         if len(clamped) > 6:
             clamped[6] = np.clip(clamped[6], 0.0, 1.0)
         return clamped
+
+    @staticmethod
+    def _predict_fake_array(instruction: str, image: np.ndarray) -> np.ndarray:
+        """
+        Returns a plausible small deterministic delta action.
+        Used in simulation when the real model is not available.
+        """
+        seed = abs(hash((instruction, getattr(image, "shape", None)))) % (2**31)
+        rng = np.random.default_rng(seed=seed)
+        delta = rng.normal(0, 0.02, size=7).astype(np.float32)
+        delta[6] = float(rng.random() > 0.5)
+        return delta
 
     @property
     def is_loaded(self) -> bool:

@@ -1,0 +1,22 @@
+# Named workspace zones for spatial conflict detection.
+# Zones are mutually exclusive - only one agent per zone at a time.
+# Coordinates in meters, robot base frame.
+
+zones:
+  zone_left:
+    description: "Left side of table"
+    x: [-0.8, 0.0]
+    y: [0.0, 0.8]
+    z: [0.0, 0.6]
+
+  zone_right:
+    description: "Right side of table"
+    x: [0.0, 0.8]
+    y: [0.0, 0.8]
+    z: [0.0, 0.6]
+
+  bin:
+    description: "Bin / disposal area"
+    x: [-0.3, 0.3]
+    y: [0.8, 1.2]
+    z: [0.0, 0.4]

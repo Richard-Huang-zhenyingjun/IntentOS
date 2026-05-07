@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.ipynb_checkpoints/
+.DS_Store
+
+# IntentOS runtime memory/log artifacts
+data/execution_history.json
+data/system_memory.json
+data/eeg_training/
+
+# Local benchmark/result scratch files
+docs/*_results.txt

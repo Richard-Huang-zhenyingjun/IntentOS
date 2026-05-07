@@ -1,0 +1,1 @@
+"""Compatibility proposer adapters."""

@@ -34,6 +34,18 @@ robot:
   # Place location
   place_position: [0.0, 0.0, 0.65]
 
+# Phase 2C: Sim-to-real arm bridge. Hardware backend is inactive by default.
+hardware:
+  backend: "simulator"             # "simulator" | "hardware"
+  config_path: "configs/hardware.yaml"
+  real:
+    port: "/dev/tty.usbmodem_arm"
+    baud: 115200
+    arduino_reset_delay_s: 2.0
+    command_delay_s: 0.05
+    auto_connect: true
+  dry_run: false
+
 # Cube
 cube_urdf: "cube_small.urdf"
 
@@ -120,12 +132,13 @@ gemini:
 # Week 2: OpenVLA proposer
 openvla:
   enabled: true
+  backend: "fake"                  # "fake" | "real"; fake is default for CPU/CI safety
   use_fake: true
   priority: 15
   camera_name: "overhead"
   model_name: "openvla/openvla-7b"
-  device: "auto"
-  torch_dtype: "bfloat16"
+  device: "mps"
+  dtype: "float16"
 
 proposers:
   blocked_states: ["executing"]     # No external proposers during execution (use lowercase state names)

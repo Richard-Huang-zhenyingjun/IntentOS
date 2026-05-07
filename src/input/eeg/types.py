@@ -1,19 +1,11 @@
 """
 EEG data types — internal to the EEG pipeline.
-Nothing in src/core/ or src/execution/ imports these.
+Nothing in src/core/ or src/execution/ imports these directly.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import List
 import numpy as np
-
-
-@dataclass
-class EEGSample:
-    """Single sample from BrainLink device"""
-    timestamp_ms: float       # Device timestamp (ms since epoch or session start)
-    value: float              # Raw voltage (microvolts typically)
-    channel: int = 0          # Channel index (0 for single-channel)
-    valid: bool = True        # False if packet was corrupted
+from src.input.eeg.eeg_source import EEGSample
 
 
 @dataclass
@@ -62,6 +54,5 @@ class EEGFeatures:
     
     # Debug
     compute_time_ms: float = 0.0
-
 
 

@@ -1,0 +1,23 @@
+# configs/real_arm.yaml
+# Use this config when running with the physical arm.
+# Run: python scripts/run_demo.py --config configs/real_arm.yaml
+#
+# SAFETY CHECKLIST before use:
+#   [ ] test_serial_connection.py passed
+#   [ ] Each servo tested individually
+#   [ ] Workspace clear of obstructions
+#   [ ] Emergency stop accessible
+#   [ ] Joint limits confirmed from firmware
+
+hardware:
+  backend: hardware
+  real:
+    port: /dev/tty.usbserial-0001
+    baud: 115200
+  max_step_deg: 10.0
+
+eeg:
+  backend: brainlink
+
+openvla:
+  backend: fake

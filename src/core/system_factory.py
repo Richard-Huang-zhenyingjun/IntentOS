@@ -9,7 +9,6 @@ from src.intelligence.proposer_registry import ProposerRegistry
 from src.intelligence.proposer_heuristic import HeuristicProposer
 from src.intelligence.proposer_gemini import GeminiProposer
 from src.external.openvla.proposer_openvla import OpenVLAProposer
-from src.external.openvla.adapter_fake import FakeOpenVLAAdapter
 from src.external.openvla.action_translator_fake import FakeActionTranslator
 from src.intelligence.scene_summarizer import SceneSummarizer
 from src.planning.plan_compiler import PlanCompiler
@@ -29,10 +28,11 @@ from src.input.source_keyboard import KeyboardSource
 from src.input.source_eeg_mock import MockEEGSource
 
 # Week 6: Real EEG source
-from src.input.eeg.eeg_source import EEGDecisionSource
+from src.input.eeg.decision_source import EEGDecisionSource
 from typing import Optional
 import logging
 import yaml
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ def build_system(config: dict) -> Orchestrator:
     
     # Week 4: Gemini proposer (if enabled)
     gemini_cfg = config.get('gemini', {})
+    gemini_client = None
     if gemini_cfg.get('enabled', False):
         gemini_client = _build_gemini_client(config)
         gemini_proposer = GeminiProposer(
@@ -119,13 +120,29 @@ def build_system(config: dict) -> Orchestrator:
     
     # 8. Primitive executor (concrete implementation)
     action_translator = _build_action_translator(sim)
-    executor = PrimitiveExecutor(controller, grasp, action_translator=action_translator)
+    hardware_bridge = _build_hardware_bridge(config, sim)
+    executor = PrimitiveExecutor(
+        controller,
+        grasp,
+        action_translator=action_translator,
+        hardware_bridge=hardware_bridge,
+    )
+    from src.agents import AgentRegistry, ArmAgent
+
+    arm_agent = ArmAgent(
+        primitive_executor=executor,
+        hardware_bridge=hardware_bridge,
+    )
+    agent_registry = AgentRegistry()
+    agent_registry.register(arm_agent)
+    _register_configured_agents(config, agent_registry)
+    agent_coordinator = _build_agent_coordinator(agent_registry)
     
     # 9. Decision pipeline (Week 5)
     decision_pipeline = _build_decision_pipeline(config, events)
     
     # 10. Assemble orchestrator with injected dependencies
-    return Orchestrator(
+    orchestrator = Orchestrator(
         config=config,
         decision_pipeline=decision_pipeline,
         sim=sim,
@@ -135,6 +152,93 @@ def build_system(config: dict) -> Orchestrator:
         world_builder=world_builder,
         events=events  # Week 7: Event emitter for auth/trust/autonomy events
     )
+    orchestrator.agent_registry = agent_registry
+    orchestrator.arm_agent = arm_agent
+    orchestrator.agent_coordinator = agent_coordinator
+    _attach_intentos_layer(
+        system=orchestrator,
+        config=config,
+        agent_registry=agent_registry,
+        agent_coordinator=agent_coordinator,
+        gemini_adapter=gemini_client,
+    )
+    return orchestrator
+
+
+def _register_configured_agents(config: dict, agent_registry) -> None:
+    """Register optional IntentOS agents from config."""
+    agents_cfg = config.get("agents", {})
+    sim_cfg = agents_cfg.get("sim_agent", {})
+
+    if not sim_cfg.get("enabled", False):
+        return
+
+    from src.agents import SimAgent, SimAgentConfig
+
+    cfg = SimAgentConfig(
+        success_rates=sim_cfg.get("success_rates", {}),
+        timing_s=sim_cfg.get("timing_s"),
+        seed=int(sim_cfg.get("seed", 42)),
+        simulate_delays=bool(sim_cfg.get("simulate_delays", True)),
+    )
+    sim_agent = SimAgent(agent_id="sim_agent", cfg=cfg)
+    agent_registry.register(sim_agent)
+    logger.info("SimAgent registered (second agent enabled)")
+
+
+def _build_agent_coordinator(agent_registry):
+    """Build IntentOS coordinator from registered agents."""
+    from src.coordination import AgentCoordinator, CoordinatorConfig
+
+    return AgentCoordinator(
+        agent_registry=agent_registry,
+        cfg=CoordinatorConfig(
+            max_parallel_agents=len(agent_registry.all_ids()),
+        ),
+    )
+
+
+def _attach_intentos_layer(
+    system: Orchestrator,
+    config: dict,
+    agent_registry,
+    agent_coordinator=None,
+    gemini_adapter=None,
+) -> None:
+    """Attach IntentOS 3B layer without changing the Phase 2 return object."""
+    from src.intentos import IntentOSConfig, IntentOSOrchestrator
+    from src.kernel import ExecutionKernel
+    from src.planning import IntentPlanner, PlannerConfig
+
+    gemini_cfg = config.get("gemini", {})
+    timeout_s = gemini_cfg.get("timeout_sec")
+    if timeout_s is None and "timeout_ms" in gemini_cfg:
+        timeout_s = float(gemini_cfg["timeout_ms"]) / 1000.0
+    if timeout_s is None:
+        timeout_s = 10.0
+
+    planner_cfg = PlannerConfig(
+        llm_enabled=bool(gemini_cfg.get("enabled", False)),
+        llm_timeout_s=float(timeout_s),
+    )
+
+    planner = IntentPlanner(
+        agent_registry=agent_registry,
+        cfg=planner_cfg,
+        gemini_adapter=gemini_adapter if planner_cfg.llm_enabled else None,
+    )
+    execution_kernel = ExecutionKernel(system)
+    intentos = IntentOSOrchestrator(
+        kernel=execution_kernel,
+        agent_registry=agent_registry,
+        planner=planner,
+        cfg=IntentOSConfig(planner=planner_cfg),
+        coordinator=agent_coordinator,
+    )
+
+    system.execution_kernel = execution_kernel
+    system.intentos_planner = planner
+    system.intentos = intentos
 
 
 def _build_gemini_client(config: dict):
@@ -159,23 +263,37 @@ def _build_openvla_proposer(config: dict, camera_provider=None) -> Optional[Open
         logger.info("[FACTORY] OpenVLA proposer disabled")
         return None
 
-    use_fake = openvla_cfg.get("use_fake", True)
-    if use_fake:
-        adapter = FakeOpenVLAAdapter()
+    backend = openvla_cfg.get("backend")
+    if backend is None:
+        backend = "fake" if openvla_cfg.get("use_fake", True) else "real"
+
+    if backend == "fake":
+        from src.external.openvla.adapter import OpenVLAAdapter
+
+        adapter = OpenVLAAdapter(backend="fake")
         adapter.load_model()
         print("[FACTORY] Using FAKE OpenVLA adapter")
-    else:
+    elif backend == "real":
         try:
             from src.external.openvla.adapter import OpenVLAAdapter
 
-            adapter = OpenVLAAdapter()
+            adapter = OpenVLAAdapter(
+                backend="real",
+                device=openvla_cfg.get("device", "auto"),
+                dtype=openvla_cfg.get("dtype", openvla_cfg.get("torch_dtype", "bfloat16")),
+            )
             adapter.load_model()
             print("[FACTORY] Using REAL OpenVLA adapter")
         except Exception as exc:
             logger.warning("[FACTORY] OpenVLA real adapter failed (%s); falling back to fake", exc)
-            adapter = FakeOpenVLAAdapter()
+            from src.external.openvla.adapter import OpenVLAAdapter
+
+            adapter = OpenVLAAdapter(backend="fake")
             adapter.load_model()
             print("[FACTORY] Using FAKE OpenVLA adapter (fallback)")
+    else:
+        logger.warning("[FACTORY] Unknown OpenVLA backend: %s", backend)
+        return None
 
     return OpenVLAProposer(
         openvla_adapter=adapter,
@@ -206,6 +324,126 @@ def _build_action_translator(sim):
 
     print("[FACTORY] Using FAKE ActionTranslator")
     return FakeActionTranslator()
+
+
+def _build_hardware_bridge(config: dict, sim):
+    """
+    Build optional sim-to-real hardware bridge.
+
+    Default PyBullet simulation keeps using RobotController directly. A bridge is
+    created only for explicit real hardware, or for MuJoCo backends exposing
+    _model/_data.
+    """
+    hardware_cfg = config.get("hardware", {})
+    backend_name = hardware_cfg.get("backend", "simulator")
+
+    joint_limits = _load_hardware_joint_limits(hardware_cfg)
+
+    if backend_name in ("hardware", "real"):
+        from src.execution.hardware_bridge import HardwareBridge
+
+        arm_controller = _build_arm_controller(config)
+        if not hardware_cfg.get("dry_run", False) and hardware_cfg.get("real", {}).get("auto_connect", True):
+            arm_controller.connect()
+        print("[FACTORY] Using HARDWARE arm bridge")
+        return HardwareBridge(_HardwareArmBackendAdapter(arm_controller), joint_limits=joint_limits)
+
+    if backend_name in ("simulator", "sim"):
+        model = getattr(sim, "_model", None)
+        data = getattr(sim, "_data", None)
+        if model is not None and data is not None:
+            from src.execution.hardware_bridge import HardwareBridge, SimBackend
+
+            print("[FACTORY] Using SIM hardware bridge")
+            return HardwareBridge(SimBackend(model, data), joint_limits=joint_limits)
+        return None
+
+    logger.warning("[FACTORY] Unknown hardware backend: %s", backend_name)
+    return None
+
+
+def _build_arm_controller(cfg: dict):
+    """Build real-arm controller from config. Simulator backend returns None."""
+    hw_cfg = cfg.get("hardware", {})
+    backend = hw_cfg.get("backend", "simulator")
+
+    if backend in ("simulator", "sim"):
+        return None
+
+    if backend in ("hardware", "real"):
+        from src.robot.hardware.arm_controller import HardwareArmController
+        from src.robot.hardware.serial_controller import SerialConfig, SerialController
+
+        real_cfg = hw_cfg.get("real", {})
+        dry_run = hw_cfg.get("dry_run", False)
+
+        if dry_run:
+            from src.robot.hardware.serial_controller_fake import FakeSerialController
+
+            serial = FakeSerialController()
+            serial.connect()
+            logger.info("Hardware arm: DRY RUN mode (fake serial controller)")
+        else:
+            serial_cfg = SerialConfig(
+                port=real_cfg["port"],
+                baud=int(real_cfg.get("baud", 115200)),
+                arduino_reset_delay_s=float(real_cfg.get("arduino_reset_delay_s", 2.0)),
+            )
+            serial = SerialController(serial_cfg)
+
+        return HardwareArmController.from_config(cfg, serial_ctrl=serial)
+
+    raise ValueError(
+        f"Unknown hardware backend: {backend!r}. Expected: simulator | hardware"
+    )
+
+
+class _HardwareArmBackendAdapter:
+    """Adapter from HardwareArmController to HardwareBridge backend protocol."""
+
+    def __init__(self, controller):
+        self._controller = controller
+
+    def apply_joints(self, commands) -> None:
+        from src.robot.hardware.arm_controller import N_JOINTS
+
+        joint_positions = np.zeros(N_JOINTS, dtype=float)
+        for command in commands:
+            if command.joint_idx < N_JOINTS:
+                joint_positions[command.joint_idx] = command.angle_rad
+        if not self._controller.move_to_joint_positions(joint_positions):
+            raise RuntimeError("HardwareArmController rejected joint command")
+
+    def emergency_stop(self) -> None:
+        self._controller.emergency_stop()
+
+    def is_connected(self) -> bool:
+        serial = getattr(self._controller, "_serial", None)
+        return bool(getattr(serial, "is_connected", False))
+
+
+def _load_hardware_joint_limits(hardware_cfg: dict) -> list[tuple[float, float]]:
+    limits = hardware_cfg.get("joint_limits_rad")
+    limits_are_degrees = False
+    if limits is None and hardware_cfg.get("joint_limits"):
+        limits = hardware_cfg.get("joint_limits")
+        limits_are_degrees = True
+    if limits is None and hardware_cfg.get("config_path"):
+        try:
+            with open(hardware_cfg["config_path"], "r") as f:
+                loaded = yaml.safe_load(f) or {}
+            nested = loaded.get("hardware", loaded)
+            limits = nested.get("joint_limits_rad")
+            if limits is None and nested.get("joint_limits"):
+                limits = nested.get("joint_limits")
+                limits_are_degrees = True
+        except FileNotFoundError:
+            logger.warning("[FACTORY] Hardware config not found: %s", hardware_cfg["config_path"])
+    if not limits:
+        return []
+    if limits_are_degrees:
+        return [(float(np.deg2rad(lo)), float(np.deg2rad(hi))) for lo, hi in limits]
+    return [(float(lo), float(hi)) for lo, hi in limits]
 
 
 def _build_decision_pipeline(config: dict, events: EventEmitter) -> DecisionPipeline:
@@ -264,6 +502,10 @@ def _build_eeg_source(config: dict) -> Optional[EEGDecisionSource]:
         replay_file = eeg_cfg.get('replay_file', 'tests/fixtures/eeg/synthetic_session.csv')
         device = ReplayDevice(replay_file, real_time=eeg_cfg.get('replay_realtime', False))
         print(f"[FACTORY] Using EEG replay device: {replay_file}")
+    elif backend == 'simulated':
+        from src.input.eeg.eeg_source_simulated import SimulatedEEGSource
+        device = SimulatedEEGSource(config)
+        print("[FACTORY] Using simulated EEG source")
     elif backend == 'brainlink':
         from src.input.eeg.device_brainlink import BrainLinkDevice
         device = BrainLinkDevice(config)
@@ -272,4 +514,4 @@ def _build_eeg_source(config: dict) -> Optional[EEGDecisionSource]:
         logger.warning(f"[FACTORY] Unknown EEG backend: {backend}")
         return None
     
-    return EEGDecisionSource(device=device, config=config)
+    return EEGDecisionSource(source=device, config=config)

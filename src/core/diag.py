@@ -90,7 +90,11 @@ def _check_openvla(config: dict) -> tuple[str, List[str]]:
     if not openvla_cfg.get("enabled", False):
         return "DISABLED (config)", warnings
 
-    if openvla_cfg.get("use_fake", True):
+    backend = openvla_cfg.get("backend")
+    if backend is None:
+        backend = "fake" if openvla_cfg.get("use_fake", True) else "real"
+
+    if backend == "fake":
         return "OK (fake adapter, no GPU)", warnings
 
     try:
@@ -103,8 +107,11 @@ def _check_openvla(config: dict) -> tuple[str, List[str]]:
                 gpu_name = "CUDA device"
             return f"OK (GPU: {gpu_name})", warnings
 
-        warnings.append("OpenVLA real adapter enabled without CUDA GPU; inference will be slow.")
-        return "WARNING (no GPU, will be slow)", warnings
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "OK (MPS available)", warnings
+
+        warnings.append("OpenVLA real adapter enabled without CUDA/MPS; inference will be slow.")
+        return "WARNING (no accelerator, will be slow)", warnings
     except ImportError:
         warnings.append("OpenVLA real adapter enabled but torch is not installed.")
         return "WARNING (torch not installed)", warnings

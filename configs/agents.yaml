@@ -1,0 +1,17 @@
+agents:
+  arm:
+    type: arm
+    enabled: true
+    description: "Primary robotic arm (real or simulated)"
+
+  sim_agent:
+    type: sim
+    enabled: false
+    description: "Simulated second agent"
+    success_rates:
+      reach: 0.90
+      grasp: 0.80
+      move: 0.95
+      release: 0.99
+      home: 0.99
+    simulate_delays: false

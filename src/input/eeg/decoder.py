@@ -7,6 +7,10 @@ No ML training required.
 """
 import time
 import logging
+import pickle
+from pathlib import Path
+import numpy as np
+from src.input.eeg.features import eeg_features_to_vector
 from src.input.eeg.types import EEGFeatures
 from src.input.types import DecisionIntent
 
@@ -31,6 +35,8 @@ class EEGDecoder:
         decoder_cfg = config.get('decoder', {})
         
         self.decoder_type = decoder_cfg.get('type', 'blink_spike')
+        self.model_path = decoder_cfg.get('model_path', 'models/eeg_classifier.pkl')
+        self.classifier_threshold = decoder_cfg.get('classifier_threshold', 0.70)
         self.spike_z_thresh = decoder_cfg.get('spike_z_thresh', 3.5)
         self.min_spikes_for_confirm = decoder_cfg.get('min_spikes_for_confirm', 2)
         self.min_interval_ms = decoder_cfg.get('min_interval_ms', 1200)
@@ -43,6 +49,9 @@ class EEGDecoder:
         # State
         self._last_confirm_time_ms: float = -999999.0  # Allow first confirm immediately
         self._consecutive_beta_high: int = 0
+        self._classifier = None
+        if self.decoder_type in ('classifier', 'ml_classifier', 'sklearn'):
+            self._classifier = self._load_classifier(self.model_path)
     
     def decode(self, features: EEGFeatures, current_time_ms: float) -> tuple:
         """
@@ -65,8 +74,71 @@ class EEGDecoder:
             return self._decode_blink_spike(features, current_time_ms)
         elif self.decoder_type == 'beta_sustain':
             return self._decode_beta_sustain(features, current_time_ms)
+        elif self.decoder_type in ('classifier', 'ml_classifier', 'sklearn'):
+            return self._decode_classifier(features, current_time_ms)
         else:
             return (DecisionIntent.NONE, 0.0, {'reason': 'unknown_decoder_type'})
+
+    def _load_classifier(self, model_path: str):
+        path = Path(model_path)
+        if not path.exists():
+            logger.warning("[DECODER] Classifier model not found: %s", path)
+            return None
+        try:
+            with path.open("rb") as f:
+                return pickle.load(f)
+        except Exception as exc:
+            logger.warning("[DECODER] Failed to load classifier %s: %s", path, exc)
+            return None
+
+    def _decode_classifier(self, features: EEGFeatures, current_time_ms: float) -> tuple:
+        debug = {
+            'decoder': 'classifier',
+            'quality': features.quality,
+            'model_path': self.model_path,
+        }
+
+        if self._classifier is None:
+            debug['reason'] = 'classifier_unavailable'
+            return (DecisionIntent.NONE, 0.0, debug)
+
+        try:
+            x = eeg_features_to_vector(features).reshape(1, -1)
+            prediction = str(self._classifier.predict(x)[0]).upper()
+
+            confidence = 1.0
+            if hasattr(self._classifier, 'predict_proba'):
+                classes = [str(cls).upper() for cls in self._classifier.classes_]
+                proba = self._classifier.predict_proba(x)[0]
+                if prediction in classes:
+                    confidence = float(proba[classes.index(prediction)])
+
+            debug['prediction'] = prediction
+            debug['confidence'] = confidence
+
+            if prediction != 'CONFIRM':
+                return (DecisionIntent.NONE, 0.0, debug)
+
+            elapsed = current_time_ms - self._last_confirm_time_ms
+            if elapsed < self.min_interval_ms:
+                debug['blocked'] = 'min_interval'
+                debug['elapsed_ms'] = elapsed
+                return (DecisionIntent.NONE, 0.0, debug)
+
+            if confidence < self.classifier_threshold:
+                debug['blocked'] = 'below_threshold'
+                return (DecisionIntent.NONE, 0.0, debug)
+
+            self._last_confirm_time_ms = current_time_ms
+            return (
+                DecisionIntent.CONFIRM,
+                min(1.0, confidence * features.quality * self.confidence_scale),
+                debug,
+            )
+        except Exception as exc:
+            debug['reason'] = 'classifier_error'
+            debug['error'] = str(exc)[:200]
+            return (DecisionIntent.NONE, 0.0, debug)
     
     def _decode_blink_spike(
         self, features: EEGFeatures, current_time_ms: float
@@ -160,4 +232,3 @@ class EEGDecoder:
             return (DecisionIntent.CONFIRM, confidence, debug)
         
         return (DecisionIntent.NONE, 0.0, debug)
-
