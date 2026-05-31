@@ -5,7 +5,11 @@ from src.worlds.world_artifacts import WorldArtifacts
 from src.robot.simulator import RobotSimulator as Simulator
 
 
-def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
+def build_messy_table(
+    sim: Simulator,
+    config: dict,
+    object_colors: list = None,
+) -> WorldArtifacts:
     """
     Build a deterministic messy table scene.
     
@@ -15,6 +19,8 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
     world_cfg = config['world']['messy_table']
     seed = world_cfg['seed']
     n_objects = world_cfg['n_objects']
+    if object_colors is None:
+        object_colors = world_cfg.get('object_colors')
     
     # Set random seed for reproducibility
     np.random.seed(seed)
@@ -78,10 +84,14 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
         # Create tuned cube (smaller/lighter with higher friction).
         size = 0.03  # half extent -> 6cm cubes
         collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[size]*3)
+        if object_colors and i < len(object_colors):
+            rgba = object_colors[i]
+        else:
+            rgba = [np.random.rand(), np.random.rand(), np.random.rand(), 1.0]
         visual = p.createVisualShape(
             p.GEOM_BOX,
             halfExtents=[size]*3,
-            rgbaColor=[np.random.rand(), np.random.rand(), np.random.rand(), 1.0]
+            rgbaColor=rgba
         )
         obj_id = p.createMultiBody(
             baseMass=0.08,  # 80g
@@ -109,6 +119,107 @@ def build_messy_table(sim: Simulator, config: dict) -> WorldArtifacts:
     
     # Draw bin zone marker (debug visualization)
     _draw_bin_zone_marker(bin_center, bin_radius)
+
+    # Create physical tray container (low walls to catch objects).
+    tray_y = -0.18
+    tray_inner_w = 0.08
+    tray_inner_d = 0.08
+    wall_t = 0.008
+    tray_center = [0.0, tray_y, 0.61]
+    tray_half = [0.08, 0.06, 0.01]  # 16cm x 12cm tray base
+
+    tray_col = p.createCollisionShape(
+        p.GEOM_BOX,
+        halfExtents=tray_half,
+    )
+    tray_vis = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=tray_half,
+        rgbaColor=[0.8, 0.6, 0.2, 0.6],
+    )
+    p.createMultiBody(
+        baseMass=0,
+        baseCollisionShapeIndex=tray_col,
+        baseVisualShapeIndex=tray_vis,
+        basePosition=tray_center,
+    )
+
+    wall_h = 0.04  # 40mm walls — tall enough to catch falling objects
+    tray_parts = [
+        (0.0, tray_y - tray_inner_d - wall_t, tray_inner_w, wall_t),
+        (0.0, tray_y + tray_inner_d + wall_t, tray_inner_w, wall_t),
+        (tray_inner_w + wall_t, tray_y, wall_t, tray_inner_d),
+        (-(tray_inner_w + wall_t), tray_y, wall_t, tray_inner_d),
+    ]
+    for wx, wy, wlx, wly in tray_parts:
+        wall_col = p.createCollisionShape(
+            p.GEOM_BOX,
+            halfExtents=[wlx, wly, wall_h],
+        )
+        wall_vis = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[wlx, wly, wall_h],
+            rgbaColor=[0.8, 0.6, 0.2, 0.4],
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=wall_col,
+            baseVisualShapeIndex=wall_vis,
+            basePosition=[wx, wy, 0.63],
+        )
+
+    # Physical bin container - beside the table edge.
+    bin_x, bin_y = 0.4, 0.0
+    bin_base_z = 0.55
+    bin_inner_w = 0.08
+    bin_inner_d = 0.08
+    bin_wall_t = 0.008
+    bin_wall_h = 0.06
+
+    bin_parts = [
+        (
+            [bin_inner_w, bin_inner_d, 0.005],
+            [bin_x, bin_y, bin_base_z],
+            [0.2, 0.6, 0.2, 1.0],
+        ),
+        (
+            [bin_inner_w + bin_wall_t, bin_wall_t, bin_wall_h],
+            [bin_x, bin_y - bin_inner_d - bin_wall_t, bin_base_z + bin_wall_h],
+            [0.2, 0.6, 0.2, 1.0],
+        ),
+        (
+            [bin_inner_w + bin_wall_t, bin_wall_t, bin_wall_h],
+            [bin_x, bin_y + bin_inner_d + bin_wall_t, bin_base_z + bin_wall_h],
+            [0.2, 0.6, 0.2, 1.0],
+        ),
+        (
+            [bin_wall_t, bin_inner_d + bin_wall_t * 2, bin_wall_h],
+            [bin_x - bin_inner_w - bin_wall_t, bin_y, bin_base_z + bin_wall_h],
+            [0.2, 0.6, 0.2, 1.0],
+        ),
+        (
+            [bin_wall_t, bin_inner_d + bin_wall_t * 2, bin_wall_h],
+            [bin_x + bin_inner_w + bin_wall_t, bin_y, bin_base_z + bin_wall_h],
+            [0.2, 0.6, 0.2, 1.0],
+        ),
+    ]
+
+    for half_extents, pos, color in bin_parts:
+        bin_col = p.createCollisionShape(
+            p.GEOM_BOX,
+            halfExtents=half_extents,
+        )
+        bin_vis = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=half_extents,
+            rgbaColor=color,
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=bin_col,
+            baseVisualShapeIndex=bin_vis,
+            basePosition=pos,
+        )
     
     return WorldArtifacts(
         table_id=table_id,

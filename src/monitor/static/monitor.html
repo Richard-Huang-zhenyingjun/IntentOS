@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IntentOS Workspace Monitor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #111827;
+  color: #e5e7eb;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+header {
+  background: #1f2937;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #374151;
+  flex-shrink: 0;
+}
+header h1 { font-size: 13px; color: #60a5fa; letter-spacing: 0.05em; font-weight: 500; }
+.conn { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6b7280; }
+.conn-dot { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; transition: background 0.3s; }
+.conn-dot.live { background: #10b981; }
+
+main {
+  display: grid;
+  grid-template-columns: 260px 1fr 220px;
+  flex: 1;
+  overflow: hidden;
+  gap: 1px;
+  background: #1f2937;
+}
+
+.panel { background: #111827; display: flex; flex-direction: column; overflow: hidden; }
+.panel-head {
+  padding: 6px 12px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #60a5fa;
+  background: #1f2937;
+  border-bottom: 1px solid #1f2937;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+#conv-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.msg { display: flex; flex-direction: column; }
+.msg.user { align-items: flex-start; }
+.msg.system { align-items: flex-end; }
+.msg-label { font-size: 10px; color: #4b5563; margin-bottom: 2px; }
+.msg-bubble {
+  max-width: 90%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.msg.user .msg-bubble { background: #1e3a5f; color: #93c5fd; border-radius: 10px 10px 10px 2px; }
+.msg.system .msg-bubble { background: #1f2937; color: #e5e7eb; border-radius: 10px 10px 2px 10px; border: 1px solid #374151; }
+.msg.system.important .msg-bubble { border-color: #60a5fa; color: #bfdbfe; }
+.msg.system.warning .msg-bubble { border-color: #f59e0b; color: #fde68a; }
+.msg.system.success .msg-bubble { border-color: #10b981; color: #a7f3d0; }
+
+.confirm-bar {
+  padding: 8px 10px;
+  display: none;
+  gap: 6px;
+  border-top: 1px solid #374151;
+  flex-shrink: 0;
+}
+.confirm-bar.visible { display: flex; }
+.btn {
+  flex: 1;
+  padding: 7px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn-yes { background: #059669; color: #fff; }
+.btn-no  { background: #374151; color: #9ca3af; }
+
+.input-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid #374151;
+  flex-shrink: 0;
+  background: #1f2937;
+}
+#cmd-input {
+  flex: 1;
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+}
+#cmd-input:focus { border-color: #60a5fa; }
+#cmd-input::placeholder { color: #4b5563; }
+#cmd-send {
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#cmd-send:hover { background: #2563eb; }
+
+#ws-panel { position: relative; }
+#ws-canvas { width: 100%; height: 100%; display: block; }
+#ws-objects {
+  position: absolute;
+  top: 30px; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+}
+.obj {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  transform: translate(-50%, -50%);
+  transition: left 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              top  0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.3s,
+              opacity 0.4s;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+.obj.targeted { box-shadow: 0 0 0 3px #fbbf24, 0 0 12px rgba(251,191,36,0.4); }
+.obj.in-bin { opacity: 0.5; }
+.obj-label {
+  position: absolute;
+  bottom: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+#arm-indicator {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 2px solid #93c5fd;
+  transform: translate(-50%, -50%);
+  transition: left 0.5s ease, top 0.5s ease, background 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  color: #fff;
+  font-weight: 600;
+  z-index: 20;
+}
+#arm-indicator.moving { background: #f59e0b; border-color: #fde68a; }
+#arm-indicator.pulse { animation: pulse 0.8s ease-in-out infinite alternate; }
+@keyframes pulse {
+  from { box-shadow: 0 0 0 0 rgba(245,158,11,0.4); }
+  to   { box-shadow: 0 0 0 8px rgba(245,158,11,0); }
+}
+
+#status-panel { padding: 12px; overflow-y: auto; }
+.status-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid #1f2937; font-size: 12px; }
+.status-label { color: #6b7280; }
+.status-value { color: #e5e7eb; text-align: right; }
+.state-executing { color: #f59e0b; }
+.state-complete { color: #10b981; }
+.state-error { color: #ef4444; }
+.state-awaiting { color: #60a5fa; }
+.safe { color: #10b981; }
+.unsafe { color: #ef4444; }
+.section-title { color: #60a5fa; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 12px 0 6px; }
+.bar-bg { height: 4px; border-radius: 999px; background: #1f2937; overflow: hidden; }
+.bar-fill { height: 100%; width: 0%; background: #10b981; transition: width 0.3s, background 0.3s; }
+.node-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; font-size: 11px; color: #9ca3af; }
+.node-dot { width: 7px; height: 7px; border-radius: 50%; background: #4b5563; flex-shrink: 0; }
+.node-dot.RUNNING, .node-dot.IN_PROGRESS { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5); }
+.node-dot.DONE, .node-dot.COMPLETE, .node-dot.COMPLETED { background: #10b981; }
+.node-dot.FAILED, .node-dot.ERROR { background: #ef4444; }
+.node-row.running { color: #fbbf24; }
+
+/* v2 status aliases */
+#status-content { padding: 10px; overflow-y: auto; font-size: 11px; }
+.srow {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #1f2937;
+}
+.slabel { color: #6b7280; }
+.svalue {
+  color: #e5e7eb;
+  font-weight: 500;
+  text-align: right;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svalue.exec { color: #fbbf24; }
+.svalue.done { color: #10b981; }
+.svalue.error { color: #ef4444; }
+.svalue.wait { color: #60a5fa; }
+.svalue.safe { color: #10b981; }
+.svalue.unsafe { color: #ef4444; }
+.sec {
+  font-size: 10px;
+  color: #60a5fa;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 10px 0 4px;
+}
+.nrow { display: flex; align-items: center; gap: 5px; padding: 2px 0; }
+.ndot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.ndot.PENDING { background: #374151; }
+.ndot.RUNNING, .ndot.IN_PROGRESS { background: #f59e0b; }
+.ndot.DONE, .ndot.COMPLETE, .ndot.COMPLETED { background: #10b981; }
+.ndot.FAILED, .ndot.ERROR { background: #ef4444; }
+.ndot.INVALIDATED { background: #4b5563; }
+.nlabel { color: #9ca3af; font-size: 10px; }
+.nlabel.RUNNING, .nlabel.IN_PROGRESS { color: #fde68a; font-weight: 600; }
+.nlabel.DONE, .nlabel.COMPLETE, .nlabel.COMPLETED { color: #a7f3d0; }
+.nlabel.FAILED, .nlabel.ERROR { color: #fca5a5; }
+.ubar-bg { width: 100%; height: 3px; background: #1f2937; border-radius: 2px; margin: 3px 0 8px; }
+.ubar-fill { height: 100%; border-radius: 2px; transition: width 0.4s, background 0.4s; }
+#phase-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  transition: background 0.3s, color 0.3s;
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>⬡ IntentOS Workspace</h1>
+  <div class="conn"><span class="conn-dot" id="cdot"></span><span id="clabel">connecting</span></div>
+</header>
+<main>
+  <section class="panel">
+    <div class="panel-head">Conversation</div>
+    <div id="conv-scroll"></div>
+    <div class="confirm-bar" id="confirm-bar">
+      <button class="btn btn-yes" id="btn-yes" onclick="confirmYes()">✓ Yes, do it</button>
+      <button class="btn btn-no" onclick="sendCmd('no')">✗ Cancel</button>
+    </div>
+    <div class="input-bar">
+      <input id="cmd-input" type="text" autocomplete="off" placeholder="Type a goal or command…" />
+      <button id="cmd-send" onclick="submitInput()">Send</button>
+    </div>
+  </section>
+
+  <section class="panel" id="ws-panel">
+    <div class="panel-head">Workspace</div>
+    <canvas id="ws-canvas"></canvas>
+    <div id="ws-objects">
+      <div id="arm-indicator">ARM</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">Status</div>
+    <div id="status-content">
+      <div id="phase-chip" style="background:#1f2937;color:#6b7280">IDLE</div>
+      <div id="phase-label" style="font-size:13px;color:#93c5fd;padding:6px 0 10px;font-weight:500">ready</div>
+      <div class="srow"><span class="slabel">Goal</span><span class="svalue" id="s-goal">—</span></div>
+      <div class="srow"><span class="slabel">Progress</span><span class="svalue" id="s-prog">—</span></div>
+      <div class="srow"><span class="slabel">Node</span><span class="svalue" id="s-node">—</span></div>
+      <div class="srow"><span class="slabel">Source</span><span class="svalue" id="s-src">—</span></div>
+      <div class="srow"><span class="slabel">false_executions</span><span class="svalue safe" id="s-fe">0</span></div>
+      <div class="sec">Uncertainty</div>
+      <div class="ubar-bg"><div class="ubar-fill" id="s-ubar" style="width:0%;background:#10b981"></div></div>
+      <div class="sec">Task graph</div>
+      <div id="s-graph"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const HOST = location.host;
+const dot = document.getElementById('cdot');
+const connLabel = document.getElementById('clabel');
+const conv = document.getElementById('conv-scroll');
+const canvas = document.getElementById('ws-canvas');
+const ctx = canvas.getContext('2d');
+const objectLayer = document.getElementById('ws-objects');
+const arm = document.getElementById('arm-indicator');
+const phaseChip = document.getElementById('phase-chip');
+const confirmBar = document.getElementById('confirm-bar');
+const input = document.getElementById('cmd-input');
+let ws;
+let reconnTimer;
+let keepaliveTimer;
+let lastState = { workspace: {}, conversation: [] };
+let convMsgs = [];
+let lastConvLen = 0;
+let wsLayout = { W: 0, H: 0, pad: 40 };
+let armPos = { x: 0.5, y: 0.85 };
+let objEls = {};
+
+function connect() {
+  ws = new WebSocket(`ws://${HOST}/ws`);
+  ws.onopen = () => {
+    dot.classList.add('live');
+    connLabel.textContent = 'live';
+    clearTimeout(reconnTimer);
+    clearInterval(keepaliveTimer);
+    convMsgs = [];
+    lastConvLen = 0;
+    document.getElementById('conv-scroll').innerHTML = '';
+    keepaliveTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+    }, 15000);
+  };
+  ws.onmessage = e => render(JSON.parse(e.data));
+  ws.onclose = () => {
+    dot.classList.remove('live');
+    connLabel.textContent = 'reconnecting';
+    clearInterval(keepaliveTimer);
+    reconnTimer = setTimeout(connect, 2000);
+  };
+}
+connect();
+
+function submitInput() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  sendCmd(text);
+}
+
+function sendCmd(text) {
+  fetch(`http://${HOST}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+  }).catch(() => {});
+  addMsg('user', text);
+}
+
+function postConversation(role, text) {
+  fetch(`http://${HOST}/conversation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, text })
+  }).catch(() => {});
+}
+
+function confirmYes() {
+  const btn = document.getElementById('btn-yes');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  sendCmd('yes');
+  addLocalMsg('system', 'Understood. Starting now…', 'important');
+  postConversation('system', 'Understood. Starting now…');
+}
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitInput();
+});
+
+function render(s) {
+  lastState = s;
+  const ws = s.workspace || {};
+  const objs = ws.objects || [];
+  const inBin = objs.filter(o => o.in_bin).map(o => o.id);
+  console.log(
+    '[RENDER] state:', s.intentos_state,
+    'bin_count:', ws.bin_count,
+    'in_bin objects:', inBin
+  );
+  renderStatus(s);
+  renderConversation(s.conversation || []);
+  renderWorkspaceCanvas();
+  renderObjects(ws, s);
+  renderConfirmBar(s.intentos_state);
+}
+
+function renderStatus(s) {
+  const st = s.intentos_state || 'IDLE';
+  const chip = document.getElementById('phase-chip');
+  const chipStyles = {
+    IDLE:             ['#1f2937', '#6b7280'],
+    PLANNING:         ['#1e3a5f', '#93c5fd'],
+    AWAITING_CONFIRM: ['#1e3a5f', '#60a5fa'],
+    EXECUTING:        ['#451a03', '#fbbf24'],
+    COMPLETE:         ['#022c22', '#10b981'],
+    ERROR:            ['#450a0a', '#ef4444'],
+    ABORTED:          ['#1f2937', '#9ca3af'],
+  };
+  const [bg, color] = chipStyles[st] || chipStyles.IDLE;
+  chip.style.background = bg;
+  chip.style.color = color;
+  chip.textContent = st.replace('_', ' ');
+  document.getElementById('phase-label').textContent =
+    getPhaseLabel(st, s.current_node || currentNodeFromGraph(s.task_graph || []));
+
+  setText('s-goal', s.goal ? trunc(s.goal, 20) : '—');
+  setText('s-prog', s.nodes_total > 0 ? `${s.nodes_complete}/${s.nodes_total}` : '—');
+  setText('s-node', s.current_node || currentNodeFromGraph(s.task_graph || []) || '—');
+  setText('s-src', s.plan_source || '—');
+
+  const fe = s.false_executions || 0;
+  const feEl = document.getElementById('s-fe');
+  feEl.textContent = fe;
+  feEl.className = 'svalue ' + (fe === 0 ? 'safe' : 'unsafe');
+
+  const u = s.uncertainty_max || 0;
+  const bar = document.getElementById('s-ubar');
+  bar.style.width = (u * 100).toFixed(0) + '%';
+  bar.style.background = u > 0.7 ? '#ef4444' : u > 0.5 ? '#f59e0b' : '#10b981';
+
+  const graph = s.task_graph || [];
+  document.getElementById('s-graph').innerHTML = graph.map(n => {
+    const status = escapeAttr(n.status);
+    return `<div class="nrow">
+      <div class="ndot ${status}"></div>
+      <span class="nlabel ${status}">${esc(n.node_id)} · ${esc(n.action_type)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderConfirmBar(state) {
+  const btn = document.getElementById('btn-yes');
+  const visible = state === 'AWAITING_CONFIRM';
+  confirmBar.classList.toggle('visible', visible);
+  if (visible) {
+    btn.disabled = false;
+    btn.textContent = '✓ Yes, do it';
+  }
+}
+
+function addLocalMsg(role, text, type) {
+  convMsgs.push({
+    role,
+    text: String(text || '').trim(),
+    type: type || '',
+    ts: Date.now(),
+  });
+  renderConvFromLocal();
+}
+
+function addMsg(role, text, type) {
+  convMsgs.push({ role, text: String(text || '').trim(), type: type || '', ts: Date.now() });
+  renderConvFromLocal();
+}
+
+function renderConversation(turns) {
+  if (turns.length === lastConvLen) return;
+  lastConvLen = turns.length;
+  convMsgs = turns.map(t => ({
+    role: t.role,
+    text: String(t.text || '').trim(),
+    type: classifyMsg(t.text || ''),
+    ts: (t.timestamp || 0) * 1000,
+  }));
+  renderConvFromLocal();
+}
+
+function renderConvFromLocal() {
+  const deduped = [];
+  for (const m of convMsgs) {
+    if (m.role === 'system' && deduped.length > 0) {
+      const prev = deduped[deduped.length - 1];
+      if (prev.role === 'system' && prev.text === m.text) continue;
+    }
+    deduped.push(m);
+  }
+  conv.innerHTML = deduped.map(m =>
+    `<div class="msg ${m.role} ${m.type}">
+      <div class="msg-label">${m.role === 'user' ? 'You' : 'System'}</div>
+      <div class="msg-bubble">${esc(m.text)}</div>
+    </div>`
+  ).join('');
+  conv.scrollTop = conv.scrollHeight;
+}
+
+function classifyMsg(text) {
+  const t = String(text || '').toLowerCase();
+  if (t.includes('done') || t.includes('complete') || t.includes('✓')) return 'success';
+  if (t.includes('wrong') || t.includes("can't") || t.includes('failed') || t.includes('blocked')) return 'warning';
+  if (t.includes('confirm') || t.includes('plan') || t.includes("i'll")) return 'important';
+  return '';
+}
+
+function getPhaseLabel(state, currentNode) {
+  if (state === 'AWAITING_CONFIRM') return 'waiting for you';
+  if (state === 'EXECUTING') {
+    if (!currentNode) return 'starting…';
+    if (currentNode.includes('reach')) return 'selecting target';
+    if (currentNode.includes('grasp')) return 'grasping';
+    if (currentNode.includes('move')) return 'transporting';
+    if (currentNode.includes('release')) return 'placing';
+    return 'executing';
+  }
+  if (state === 'COMPLETE') return 'task complete';
+  if (state === 'PLANNING') return 'planning…';
+  if (state === 'ERROR') return 'needs attention';
+  return 'ready';
+}
+
+function renderWorkspaceCanvas() {
+  const panel = document.getElementById('ws-panel');
+  canvas.width = panel.clientWidth;
+  canvas.height = panel.clientHeight - 30;
+  wsLayout.W = canvas.width;
+  wsLayout.H = canvas.height;
+
+  const { W, H, pad } = wsLayout;
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.fillStyle = '#1a2535';
+  ctx.strokeStyle = '#2a3f5f';
+  ctx.lineWidth = 1;
+  roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, 10, true, true);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 0.5;
+  for (let x = pad + 40; x < W - pad; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, H - pad); ctx.stroke();
+  }
+  for (let y = pad + 40; y < H - pad; y += 40) {
+    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke();
+  }
+
+  const bx = W - pad - 65, by = H / 2 - 35;
+  ctx.strokeStyle = '#065f46';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 3]);
+  ctx.strokeRect(bx, by, 58, 70);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(16,185,129,0.06)';
+  ctx.fillRect(bx, by, 58, 70);
+  ctx.fillStyle = '#10b981';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BIN', bx + 29, by + 20);
+
+  const tx2 = W * 0.5 - 36, ty2 = H - pad - 52;
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.strokeRect(tx2, ty2, 72, 44);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(245,158,11,0.05)';
+  ctx.fillRect(tx2, ty2, 72, 44);
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('TRAY', tx2 + 36, ty2 + 26);
+
+  wsLayout.bin = { x: bx + 29, y: by + 45 };
+  wsLayout.tray = {
+    x: W * 0.5,
+    y: H - pad - 50
+  };
+  wsLayout.home = { x: W * 0.5, y: H - pad - 20 };
+}
+
+function renderObjects(workspace, state) {
+  const { W, H, pad } = wsLayout;
+  if (!W) return;
+
+  const objects = workspace.objects || [];
+  const activeIds = new Set(objects.map(obj => obj.id));
+
+  Object.keys(objEls).forEach(id => {
+    if (!activeIds.has(id)) {
+      objEls[id].remove();
+      delete objEls[id];
+    }
+  });
+
+  let targetPos = null;
+
+  objects.forEach((obj, index) => {
+    if (!obj.visible) return;
+    const id = obj.id || obj.label || `object-${index}`;
+    let el = objEls[id];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'obj';
+      el.innerHTML = `<span>${esc(abbrev(obj.label || obj.id))}</span><span class="obj-label">${esc(obj.label || obj.id)}</span>`;
+      objectLayer.appendChild(el);
+      objEls[id] = el;
+    }
+
+    let x = (obj.x || 0.4) * W;
+    let y = (obj.y || 0.4) * H;
+    if (obj.in_bin && wsLayout.bin) {
+      const binObjs = objects.filter(o => o.in_bin);
+      const binIdx = binObjs.indexOf(obj);
+      const cols = 2;
+      const spacing = 22;
+      const col = binIdx % cols;
+      const row = Math.floor(binIdx / cols);
+      x = wsLayout.bin.x + (col - 0.5) * spacing;
+      y = wsLayout.bin.y - 10 + row * spacing;
+    } else if (obj.in_tray && wsLayout.tray) {
+      x = wsLayout.tray.x;
+      y = wsLayout.tray.y;
+    }
+
+    el.style.background = obj.in_bin ? '#047857' : (obj.color || '#6b7280');
+    el.classList.toggle('targeted', !!obj.highlighted);
+    el.classList.toggle('in-bin', !!obj.in_bin);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.title = obj.label || obj.id || '';
+
+    if (obj.highlighted) targetPos = { x, y };
+  });
+
+  const moving = workspace.arm_position === 'moving' || state.intentos_state === 'EXECUTING';
+  const home = wsLayout.home || { x: W * 0.5, y: H - pad - 20 };
+  arm.classList.toggle('moving', moving);
+  arm.classList.toggle('pulse', moving);
+
+  if (moving && targetPos) {
+    arm.style.left = `${targetPos.x}px`;
+    arm.style.top = `${targetPos.y}px`;
+  } else {
+    arm.style.left = `${home.x}px`;
+    arm.style.top = `${home.y}px`;
+  }
+}
+
+function setText(id, text, cls) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  if (cls) el.className = cls;
+}
+
+function stateClass(st) {
+  if (st === 'EXECUTING') return 'state-executing';
+  if (st === 'COMPLETE') return 'state-complete';
+  if (st === 'ERROR') return 'state-error';
+  if (st === 'AWAITING_CONFIRM') return 'state-awaiting';
+  return '';
+}
+
+function currentNodeFromGraph(graph) {
+  const current = graph.find(n => ['RUNNING', 'IN_PROGRESS'].includes(n.status));
+  return current ? current.node_id : '';
+}
+
+function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+function abbrev(label = '') {
+  const words = String(label).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return words.map(w => w[0].toUpperCase()).join('').slice(0, 3);
+}
+
+function truncate(s = '', n = 24) { return String(s).length > n ? String(s).slice(0, n - 1) + '...' : String(s); }
+function escapeAttr(s = '') { return String(s).replace(/[^A-Z_]/gi, ''); }
+function escapeHtml(s = '') {
+  return String(s).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+function trunc(s = '', n = 24) { return truncate(s, n); }
+function esc(s = '') { return escapeHtml(s); }
+window.addEventListener('resize', () => render(lastState));
+</script>
+</body>
+</html>

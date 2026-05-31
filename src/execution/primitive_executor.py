@@ -61,6 +61,7 @@ class PrimitiveExecutor:
         self._retry_offset = 0.0
         self._release_started = False
         self._release_start_frame = 0
+        self._last_grasped_object_id = None
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
         self._openvla_wait_for_update = False
@@ -195,6 +196,8 @@ class PrimitiveExecutor:
         
         elif kind == "grasp":
             # Use grasp controller
+            if primitive.object_id is not None:
+                self._last_grasped_object_id = primitive.object_id
             if primitive.object_id is not None and hasattr(self.grasp, "attach") and primitive.metadata.get("object_position") is None:
                 # Legacy compatibility for existing tests/call sites.
                 try:
@@ -253,6 +256,7 @@ class PrimitiveExecutor:
         elif kind == "release":
             if self._release_legacy_fast:
                 self._release_legacy_fast = False
+                self._stabilize_released_object()
                 return True
             return self._execute_release()
 
@@ -457,14 +461,56 @@ class PrimitiveExecutor:
             if not state.is_grasping:
                 print(f"[RELEASE] ✓ Object released (force: {state.force:.1f}N)")
                 self._release_started = False
+                self._stabilize_released_object()
                 return True
 
-        if self.frame_count - self._release_start_frame > 120:
+        if self.frame_count - self._release_start_frame > 30:
             print("[RELEASE] Timeout (assuming released)")
             self._release_started = False
+            self._stabilize_released_object()
             return True
 
         return False
+
+    def _stabilize_released_object(self) -> None:
+        """Clamp and stop the most recently grasped object after release."""
+        if self._last_grasped_object_id is None:
+            return
+        try:
+            import pybullet as p
+
+            obj_id = self._last_grasped_object_id
+            client = getattr(
+                self.controller,
+                "client",
+                getattr(self.controller, "physics_client", None),
+            )
+            if client is None:
+                sim = getattr(self.controller, "sim", None)
+                client = getattr(sim, "client", 0)
+
+            pos, orn = p.getBasePositionAndOrientation(
+                obj_id,
+                physicsClientId=client,
+            )
+            safe_x = max(-0.6, min(0.6, pos[0]))
+            safe_y = max(-0.4, min(0.4, pos[1]))
+            safe_z = max(0.55, min(0.85, pos[2]))
+            p.resetBasePositionAndOrientation(
+                obj_id,
+                [safe_x, safe_y, safe_z],
+                orn,
+                physicsClientId=client,
+            )
+            p.resetBaseVelocity(
+                obj_id,
+                [0, 0, 0],
+                [0, 0, 0],
+                physicsClientId=client,
+            )
+            self._last_grasped_object_id = None
+        except Exception:
+            pass
 
     def _execute_openvla_trajectory_start(self, primitive: Primitive, world: WorldState) -> bool:
         """

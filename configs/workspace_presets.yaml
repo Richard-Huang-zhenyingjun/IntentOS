@@ -1,0 +1,164 @@
+# Smart Workspace v1 Scenario Presets
+# Load with: python scripts/run_workspace.py --preset <name>
+
+presets:
+
+  # Happy path
+  workspace_easy_clean:
+    description: "3 blocks, tool, screwdriver. All visible and reachable."
+    objects:
+      - id: red_block
+        label: "red block"
+        position: [0.2, 0.1, 0.1]
+        color: red
+        visible: true
+      - id: blue_block
+        label: "blue block"
+        position: [0.0, 0.2, 0.1]
+        color: blue
+        visible: true
+      - id: yellow_block
+        label: "yellow block"
+        position: [-0.2, 0.1, 0.1]
+        color: yellow
+        visible: true
+      - id: tool
+        label: "tool"
+        position: [0.1, -0.1, 0.1]
+        color: null
+        visible: true
+    failure_injection: none
+    suggested_goals:
+      - "clean the table"
+      - "put the tools in the tray"
+
+  # Blocked object
+  workspace_blocked_object:
+    description: "Blue block is behind the cup. Requires cup to move first."
+    objects:
+      - id: red_block
+        label: "red block"
+        position: [0.2, 0.1, 0.1]
+        color: red
+        visible: true
+      - id: blue_block
+        label: "blue block"
+        position: [0.0, 0.3, 0.1]
+        color: blue
+        visible: true
+      - id: cup
+        label: "cup"
+        position: [0.0, 0.2, 0.12]
+        color: null
+        visible: true
+    failure_injection:
+      type: spatial_block
+      blocked_object: blue_block
+      blocking_object: cup
+    suggested_goals:
+      - "move the blue block to the bin"
+      - "clean the table"
+
+  # Missing object
+  workspace_missing_object:
+    description: "User asks for red block but it isn't there."
+    objects:
+      - id: blue_block
+        label: "blue block"
+        position: [0.0, 0.2, 0.1]
+        color: blue
+        visible: true
+      - id: yellow_block
+        label: "yellow block"
+        position: [-0.2, 0.1, 0.1]
+        color: yellow
+        visible: true
+    failure_injection:
+      type: object_missing
+      missing_object: red_block
+    suggested_goals:
+      - "move the red block to the bin"
+
+  # Unreachable object
+  workspace_unreachable:
+    description: "Yellow block is at the edge, outside arm workspace."
+    objects:
+      - id: red_block
+        label: "red block"
+        position: [0.2, 0.1, 0.1]
+        color: red
+        visible: true
+      - id: yellow_block
+        label: "yellow block"
+        position: [0.95, 0.0, 0.1]
+        color: yellow
+        visible: true
+    failure_injection:
+      type: unreachable
+      unreachable_object: yellow_block
+    suggested_goals:
+      - "clean the table"
+      - "move the yellow block to the bin"
+
+  # Ambiguous command
+  workspace_ambiguous:
+    description: "Objects on both sides. Ambiguous directional commands."
+    objects:
+      - id: red_block
+        label: "red block"
+        position: [0.3, 0.1, 0.1]
+        color: red
+        visible: true
+        side: right
+      - id: blue_block
+        label: "blue block"
+        position: [-0.3, 0.1, 0.1]
+        color: blue
+        visible: true
+        side: left
+      - id: tool
+        label: "tool"
+        position: [0.3, -0.1, 0.1]
+        color: null
+        visible: true
+        side: right
+    failure_injection: none
+    suggested_goals:
+      - "clear that side"
+      - "clean the right side"
+      - "move everything on the left"
+
+  # User cancels midway
+  workspace_cancel_midway:
+    description: "5 objects. System starts, user cancels after 2 moves."
+    objects:
+      - id: red_block
+        label: "red block"
+        position: [0.2, 0.1, 0.1]
+        color: red
+        visible: true
+      - id: blue_block
+        label: "blue block"
+        position: [0.0, 0.2, 0.1]
+        color: blue
+        visible: true
+      - id: yellow_block
+        label: "yellow block"
+        position: [-0.2, 0.1, 0.1]
+        color: yellow
+        visible: true
+      - id: tool
+        label: "tool"
+        position: [0.1, -0.1, 0.1]
+        color: null
+        visible: true
+      - id: screwdriver
+        label: "screwdriver"
+        position: [-0.1, -0.1, 0.1]
+        color: null
+        visible: true
+    failure_injection:
+      type: user_cancel
+      cancel_after_nodes: 2
+    suggested_goals:
+      - "clean the table"

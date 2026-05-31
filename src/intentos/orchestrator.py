@@ -158,6 +158,8 @@ class IntentOSOrchestrator:
             "intentos_state": self._state.name,
             "kernel_state": self._kernel.get_state().name,
             "false_executions": self._kernel.get_capabilities().false_executions,
+            "task_graph": [],
+            "uncertainty_max": 0.0,
         }
         if self._context is not None:
             graph = self._context.graph
@@ -173,6 +175,23 @@ class IntentOSOrchestrator:
                     ),
                     "segments_total": len(self._segments),
                     "current_segment_idx": self._current_segment_idx,
+                    "task_graph": [
+                        {
+                            "node_id": n.node_id,
+                            "action_type": n.action_type,
+                            "parameters": n.parameters,
+                            "status": n.status.name,
+                            "uncertainty": round(n.uncertainty.combined, 2),
+                        }
+                        for n in graph.nodes
+                    ],
+                    "uncertainty_max": round(
+                        max(
+                            (n.uncertainty.combined for n in graph.nodes),
+                            default=0.0,
+                        ),
+                        2,
+                    ),
                 }
             )
         return status

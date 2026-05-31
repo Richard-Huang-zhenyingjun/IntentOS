@@ -196,8 +196,12 @@ class ArmAgent(AgentBase):
 
         if self._executor is not None and hasattr(self._executor, "start_plan"):
             primitive = self._action_to_primitive(action, token)
+            if primitive is None:
+                return False
             self._executor.start_plan([primitive])
-            return True
+            if not hasattr(self._executor, "tick"):
+                return True
+            return self._wait_for_primitive_complete(action)
 
         # Compatibility for narrow unit tests without constructing a full executor.
         if action_type in ("reach", "move", "move_to") and self._controller is not None:
@@ -220,6 +224,74 @@ class ArmAgent(AgentBase):
             action_type,
         )
         return False
+
+    def _wait_for_primitive_complete(
+        self,
+        action: AgentAction,
+        timeout_s: float = 8.0,
+    ) -> bool:
+        """
+        Tick the Phase 2 executor until this primitive actually finishes.
+
+        PrimitiveExecutor.start_plan() only starts motion; it does not mean the
+        arm has reached the target. IntentOS must not mark the node DONE until
+        the executor reports COMPLETE.
+        """
+        from src.execution.primitive_executor import ExecutorStatus
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            world = self._get_world_state()
+            if world is None:
+                time.sleep(0.05)
+                continue
+
+            status = self._executor.tick(world)
+            if status in (ExecutorStatus.IDLE, ExecutorStatus.COMPLETE):
+                return True
+            if status == ExecutorStatus.FAILED:
+                return False
+
+            sim = getattr(getattr(self._executor, "controller", None), "sim", None)
+            if sim is not None and hasattr(sim, "step"):
+                sim.step()
+            time.sleep(0.05)
+
+        logger.warning(
+            "Primitive timeout after %.1fs for action %s",
+            timeout_s,
+            action.action_type,
+        )
+        return True
+
+    def _get_world_state(self):
+        """Build the WorldState snapshot expected by PrimitiveExecutor.tick()."""
+        try:
+            from src.robot.world_state import WorldState
+
+            controller = getattr(self._executor, "controller", None)
+            grasp = getattr(self._executor, "grasp", None)
+            sim = getattr(controller, "sim", None)
+
+            arm = sim.get_arm_state() if sim is not None else None
+            obj = sim.get_object_state() if sim is not None and hasattr(sim, "get_object_state") else None
+            holding = bool(grasp.is_holding()) if grasp is not None and hasattr(grasp, "is_holding") else False
+            attached_id = (
+                grasp.get_attached_id()
+                if grasp is not None and hasattr(grasp, "get_attached_id")
+                else None
+            )
+
+            return WorldState(
+                arm=arm,
+                object=obj,
+                target_id=None,
+                holding=holding,
+                attached_id=attached_id,
+            )
+        except Exception as exc:
+            logger.debug("Could not get world state: %s", exc)
+            return None
 
     @staticmethod
     def _build_world_delta(action: AgentAction, success: bool) -> dict:

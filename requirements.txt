@@ -15,6 +15,9 @@ ultralytics>=8.0.0  # YOLOv8 for real object recognition (80 classes)
 
 # UI dependencies (Week 1)
 Pillow>=10.0.0  # For image conversion (PIL)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0
 
 # Testing (optional)
 pytest>=7.4.0

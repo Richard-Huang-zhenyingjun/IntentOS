@@ -255,18 +255,72 @@ class HeuristicPlanner:
 
     def __init__(self, registry: AgentRegistry):
         self._registry = registry
+        self._world_artifacts = None
+        self._sim = None
+        self._label_map = {}
+        self._id_to_label = {}
+        self._moved_object_ids: set = set()
+
+    def set_world_context(self, world_artifacts, sim) -> None:
+        """Attach optional simulator context for coordinate grounding."""
+        self._world_artifacts = world_artifacts
+        self._sim = sim
+
+    def set_object_labels(self, label_map: dict) -> None:
+        """
+        Map semantic labels to PyBullet body IDs.
+        label_map: {"red_block": 4, "blue_block": 5, ...}
+        Built from preset objects list + world_artifacts.object_ids
+        in spawn order.
+        """
+        self._label_map = label_map
+        self._id_to_label = {v: k for k, v in label_map.items()}
+
+    def mark_object_moved(self, object_id: int) -> None:
+        """Call after an object is successfully moved to bin/tray."""
+        self._moved_object_ids.add(object_id)
+
+    def reset_moved_objects(self) -> None:
+        """Call at session start or preset reset."""
+        self._moved_object_ids.clear()
+
+    def set_moved_objects(self, object_ids: set) -> None:
+        """Replace moved-object tracking from the interaction session."""
+        self._moved_object_ids = set(object_ids)
+
+    @staticmethod
+    def _is_valid_position(pos) -> bool:
+        """Check if a PyBullet position is physically sane."""
+        import math
+
+        return all(
+            not math.isnan(x) and not math.isinf(x) and abs(x) < 5.0
+            for x in pos
+        )
 
     def plan(self, goal: str, scene_summary: str) -> TaskGraph:
         del scene_summary
         goal_lower = goal.lower()
         graph_id = str(uuid.uuid4())[:8]
 
-        if any(word in goal_lower for word in ("clean", "clear", "tidy")):
+        object_label, destination = self._parse_object_goal(goal_lower)
+        take_out_words = [
+            "take out",
+            "from bin",
+            "out of bin",
+            "bring back",
+            "remove from bin",
+        ]
+
+        if any(w in goal_lower for w in take_out_words):
+            nodes = self._take_from_bin_nodes(destination="table")
+        elif object_label:
+            nodes = self._specific_object_nodes(object_label, destination)
+        elif any(w in goal_lower for w in ("clean", "clear", "tidy")):
             nodes = self._clean_table_nodes()
         elif "home" in goal_lower:
             nodes = self._home_nodes()
         else:
-            logger.info("Unknown goal %r - using safe single-reach plan.", goal)
             nodes = self._safe_default_nodes(goal)
 
         return TaskGraph(
@@ -275,16 +329,360 @@ class HeuristicPlanner:
             nodes=nodes,
             created_at=time.time(),
             plan_confidence=0.6,
-            interpretation_note="Heuristic plan (LLM unavailable or invalid)",
+            interpretation_note="Heuristic plan",
         )
 
+    def _parse_object_goal(self, goal_lower: str) -> tuple[Optional[str], str]:
+        """
+        Parse goal for specific object reference and destination.
+        Returns (object_label_or_None, destination).
+
+        Examples:
+          "move the red block to the bin" -> ("red_block", "bin")
+          "put the tool in the tray" -> ("tool", "tray")
+          "move blue block to tray" -> ("blue_block", "tray")
+        """
+        destination = "bin"
+        if "tray" in goal_lower:
+            destination = "tray"
+
+        for label in self._label_map.keys():
+            variants = [
+                label,
+                label.replace("_", " "),
+                label.split("_")[0],
+            ]
+            if any(v in goal_lower for v in variants):
+                return label, destination
+
+        return None, destination
+
     def _clean_table_nodes(self) -> list[TaskNode]:
+        cycles = []
+        available = self._get_available_objects()
+
+        if not available:
+            available = [None]
+
+        prev_release_id = None
+        for i, obj_info in enumerate(available):
+            reach_id = f"reach_{i}"
+            grasp_id = f"grasp_{i}"
+            move_id = f"move_{i}"
+            release_id = f"release_{i}"
+
+            deps_reach = [prev_release_id] if prev_release_id else []
+
+            reach_params = obj_info if obj_info else {"target": "nearest_object"}
+            bin_params = self._resolve_bin()
+
+            cycles.extend(
+                [
+                    TaskNode(
+                        node_id=reach_id,
+                        action_type="reach",
+                        agent_id="arm",
+                        parameters=reach_params,
+                        depends_on=deps_reach,
+                        confirmation_policy=ConfirmationPolicy.CHECKPOINT,
+                        uncertainty=UncertaintySignals.unknown(),
+                    ),
+                    TaskNode(
+                        node_id=grasp_id,
+                        action_type="grasp",
+                        agent_id="arm",
+                        parameters={},
+                        depends_on=[reach_id],
+                        confirmation_policy=ConfirmationPolicy.NEVER,
+                        uncertainty=UncertaintySignals.unknown(),
+                    ),
+                    TaskNode(
+                        node_id=move_id,
+                        action_type="move",
+                        agent_id="arm",
+                        parameters=bin_params,
+                        depends_on=[grasp_id],
+                        confirmation_policy=ConfirmationPolicy.NEVER,
+                        uncertainty=UncertaintySignals.unknown(),
+                    ),
+                    TaskNode(
+                        node_id=release_id,
+                        action_type="release",
+                        agent_id="arm",
+                        parameters={},
+                        depends_on=[move_id],
+                        confirmation_policy=ConfirmationPolicy.NEVER,
+                        uncertainty=UncertaintySignals.unknown(),
+                    ),
+                ]
+            )
+            prev_release_id = release_id
+
+        return cycles
+
+    def _get_available_objects(self) -> list[dict]:
+        """
+        Returns list of grounded parameter dicts for each object
+        currently on the table (not in bin zone).
+        """
+        if self._world_artifacts is None or self._sim is None:
+            return []
+
+        import pybullet as p
+
+        bin_center = self._world_artifacts.bin_zone_center
+        bin_radius = self._world_artifacts.bin_zone_radius
+
+        available = []
+        for obj_id in self._world_artifacts.object_ids:
+            if obj_id in self._moved_object_ids:
+                continue
+            try:
+                pos, _ = p.getBasePositionAndOrientation(
+                    obj_id, physicsClientId=self._sim.client
+                )
+                if not self._is_valid_position(pos):
+                    continue
+                dx = pos[0] - bin_center[0]
+                dy = pos[1] - bin_center[1]
+                in_bin = (dx**2 + dy**2) ** 0.5 < bin_radius * 1.2
+                if in_bin:
+                    continue
+                available.append(
+                    {
+                        "target": f"object_{obj_id}",
+                        "target_xyz": list(pos),
+                        "object_id": obj_id,
+                    }
+                )
+            except Exception:
+                continue
+        return available
+
+    def _get_bin_objects(self) -> list[dict]:
+        """Returns grounded params for objects currently in bin."""
+        if self._world_artifacts is None or self._sim is None:
+            return []
+
+        import pybullet as p
+
+        bin_center = self._world_artifacts.bin_zone_center
+        bin_radius = self._world_artifacts.bin_zone_radius
+        in_bin = []
+        for obj_id in self._world_artifacts.object_ids:
+            try:
+                pos, _ = p.getBasePositionAndOrientation(
+                    obj_id, physicsClientId=self._sim.client
+                )
+                dx = pos[0] - bin_center[0]
+                dy = pos[1] - bin_center[1]
+                if (dx**2 + dy**2) ** 0.5 < bin_radius * 1.5:
+                    in_bin.append(
+                        {
+                            "target": f"object_{obj_id}",
+                            "target_xyz": list(pos),
+                            "object_id": obj_id,
+                        }
+                    )
+            except Exception:
+                continue
+        return in_bin
+
+    def _resolve_nearest_object(self) -> dict:
+        if self._world_artifacts is None or self._sim is None:
+            return {
+                "target": "nearest_object",
+                "target_xyz": [0.2, 0.0, 0.65],
+            }
+
+        try:
+            import pybullet as p
+        except ImportError:
+            logger.warning("PyBullet unavailable; using fallback nearest object target.")
+            return {
+                "target": "nearest_object",
+                "target_xyz": [0.2, 0.0, 0.65],
+            }
+
+        try:
+            bin_center = self._world_artifacts.bin_zone_center
+            bin_radius = self._world_artifacts.bin_zone_radius
+            object_ids = self._world_artifacts.object_ids
+            client = self._sim.client
+        except AttributeError:
+            logger.warning("Could not read world artifacts; using fallback nearest object.")
+            return {
+                "target": "nearest_object",
+                "target_xyz": [0.2, 0.0, 0.65],
+            }
+
+        best_id = None
+        best_pos = None
+        best_dist = float("inf")
+
+        for obj_id in object_ids:
+            if obj_id in self._moved_object_ids:
+                continue
+            try:
+                pos, _ = p.getBasePositionAndOrientation(
+                    obj_id,
+                    physicsClientId=client,
+                )
+            except Exception:
+                continue
+
+            dx = pos[0] - bin_center[0]
+            dy = pos[1] - bin_center[1]
+            dist_to_bin = (dx**2 + dy**2) ** 0.5
+            if dist_to_bin < bin_radius * 3.0:
+                continue
+
+            dist = (pos[0] ** 2 + pos[1] ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_id = obj_id
+                best_pos = pos
+
+        if best_id is None or best_pos is None:
+            logger.warning("No table object found; using fallback nearest object target.")
+            return {
+                "target": "nearest_object",
+                "target_xyz": [0.2, 0.0, 0.65],
+            }
+
+        return {
+            "target": f"object_{best_id}",
+            "target_xyz": list(best_pos),
+            "object_id": best_id,
+        }
+
+    def _resolve_object_by_label(self, label: str) -> dict:
+        """
+        Resolve a semantic label to grounded coordinates.
+
+        Returns a dict with a status field:
+          - "resolved": object found, has valid target_xyz
+          - "already_moved": object exists but was already handled
+          - "not_present": no object matches this label in the scene
+          - "unreachable": object matched but has an invalid position
+        """
+        try:
+            import pybullet as p
+        except ImportError:
+            return {
+                "status": "not_present",
+                "target": None,
+                "object_id": None,
+                "target_xyz": None,
+                "label": label,
+            }
+
+        body_id = self._label_map.get(label)
+        if body_id is None:
+            label_tokens = set(label.replace("_", " ").lower().split())
+            for k, v in self._label_map.items():
+                k_tokens = set(k.replace("_", " ").lower().split())
+                if label_tokens and label_tokens.issubset(k_tokens):
+                    body_id = v
+                    break
+                if k_tokens and k_tokens.issubset(label_tokens):
+                    body_id = v
+                    break
+
+        if body_id is None:
+            return {
+                "status": "not_present",
+                "target": None,
+                "object_id": None,
+                "target_xyz": None,
+                "label": label,
+            }
+
+        if body_id in self._moved_object_ids:
+            return {
+                "status": "already_moved",
+                "target": "already_moved",
+                "object_id": body_id,
+                "target_xyz": [0.0, 0.0, 0.65],
+                "label": label,
+            }
+
+        try:
+            pos, _ = p.getBasePositionAndOrientation(
+                body_id, physicsClientId=self._sim.client
+            )
+            valid = self._is_valid_position(pos)
+            if not valid:
+                return {
+                    "status": "unreachable",
+                    "target": None,
+                    "object_id": body_id,
+                    "target_xyz": None,
+                    "label": label,
+                }
+
+            return {
+                "status": "resolved",
+                "target": f"object_{body_id}",
+                "target_xyz": list(pos),
+                "object_id": body_id,
+                "label": label,
+            }
+        except Exception:
+            return {
+                "status": "unreachable",
+                "target": None,
+                "object_id": body_id,
+                "target_xyz": None,
+                "label": label,
+            }
+
+    def _resolve_bin(self) -> dict:
+        if self._world_artifacts is None:
+            return {"target": "bin"}
+        try:
+            center = self._world_artifacts.bin_zone_center
+            # Release above bin walls so objects fall into the physical bin.
+            return {
+                "target": "bin",
+                "target_xyz": list(center),
+                "destination_xyz": list(center),
+            }
+        except AttributeError:
+            return {"target": "bin"}
+
+    def _resolve_tray(self) -> dict:
+        """Resolve tray destination coordinates."""
+        tray_pos = [0.0, -0.18, 0.68]
+        return {
+            "target": "tray",
+            "target_xyz": tray_pos,
+            "destination_xyz": tray_pos,
+        }
+
+    def _specific_object_nodes(
+        self,
+        object_label: str,
+        destination: str = "bin",
+    ) -> list[TaskNode]:
+        """One reach-grasp-move-release for a specific named object."""
+        reach_params = self._resolve_object_by_label(object_label)
+        if reach_params.get("status") != "resolved":
+            return self._safe_default_nodes(
+                f"{reach_params.get('label', object_label)} "
+                f"{reach_params.get('status', 'not_present')}"
+            )
+        move_params = (
+            self._resolve_bin()
+            if destination == "bin"
+            else self._resolve_tray()
+        )
         return [
             TaskNode(
                 node_id="reach_0",
                 action_type="reach",
                 agent_id="arm",
-                parameters={"target": "nearest_object"},
+                parameters=reach_params,
                 depends_on=[],
                 confirmation_policy=ConfirmationPolicy.CHECKPOINT,
                 uncertainty=UncertaintySignals.unknown(),
@@ -302,7 +700,65 @@ class HeuristicPlanner:
                 node_id="move_0",
                 action_type="move",
                 agent_id="arm",
-                parameters={"target": "bin"},
+                parameters=move_params,
+                depends_on=["grasp_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+                uncertainty=UncertaintySignals.unknown(),
+            ),
+            TaskNode(
+                node_id="release_0",
+                action_type="release",
+                agent_id="arm",
+                parameters={},
+                depends_on=["move_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+                uncertainty=UncertaintySignals.unknown(),
+            ),
+        ]
+
+    def _take_from_bin_nodes(
+        self,
+        destination: str = "table",
+    ) -> list[TaskNode]:
+        """Move nearest bin object to table center or tray."""
+        bin_objects = self._get_bin_objects()
+        if not bin_objects:
+            return self._safe_default_nodes("take from bin")
+
+        obj = bin_objects[0]
+        if destination == "tray":
+            dest_params = self._resolve_tray()
+        else:
+            dest_params = {
+                "target": "table",
+                "target_xyz": [0.0, 0.0, 0.63],
+                "destination_xyz": [0.0, 0.0, 0.63],
+            }
+
+        return [
+            TaskNode(
+                node_id="reach_0",
+                action_type="reach",
+                agent_id="arm",
+                parameters=obj,
+                depends_on=[],
+                confirmation_policy=ConfirmationPolicy.CHECKPOINT,
+                uncertainty=UncertaintySignals.unknown(),
+            ),
+            TaskNode(
+                node_id="grasp_0",
+                action_type="grasp",
+                agent_id="arm",
+                parameters={},
+                depends_on=["reach_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+                uncertainty=UncertaintySignals.unknown(),
+            ),
+            TaskNode(
+                node_id="move_0",
+                action_type="move",
+                agent_id="arm",
+                parameters=dest_params,
                 depends_on=["grasp_0"],
                 confirmation_policy=ConfirmationPolicy.NEVER,
                 uncertainty=UncertaintySignals.unknown(),
@@ -336,12 +792,14 @@ class HeuristicPlanner:
         ]
 
     def _safe_default_nodes(self, goal: str) -> list[TaskNode]:
+        reach_params = self._resolve_nearest_object()
+        reach_params["goal_context"] = goal
         return [
             TaskNode(
                 node_id="reach_default",
                 action_type="reach",
                 agent_id="arm",
-                parameters={"target": "nearest_object", "goal_context": goal},
+                parameters=reach_params,
                 depends_on=[],
                 confirmation_policy=ConfirmationPolicy.CHECKPOINT,
                 uncertainty=UncertaintySignals.unknown(),
