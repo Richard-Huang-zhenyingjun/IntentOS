@@ -6050,3 +6050,5 @@ pybullet build time: Sep  3 2024 12:57:43
 2026-06-07 18:50:34,966 src.intentos.orchestrator INFO: Recovery: retry node grasp_0
 2026-06-07 18:50:35,088 src.intentos.orchestrator INFO: Recovery: retry node grasp_0
 2026-06-07 18:50:35,311 src.intentos.orchestrator ERROR: Recovery: escalation - Arm in error state: Action grasp failed. All agents stopped.
+[31mERROR[0m:    [Errno 1] error while attempting to bind on address ('127.0.0.1', 7788): [errno 1] operation not permitted
+pybullet build time: Sep  3 2024 12:57:43
