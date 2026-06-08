@@ -62,6 +62,7 @@ class PrimitiveExecutor:
         self._release_started = False
         self._release_start_frame = 0
         self._last_grasped_object_id = None
+        self._grasp_constraint_id = None
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
         self._openvla_wait_for_update = False
@@ -395,81 +396,40 @@ class PrimitiveExecutor:
             return False
 
         if self._grasp_stage == GraspStage.CLOSE:
-            if self._grasp_close_start_frame == 0:
-                print("[GRASP] Stage: CLOSE")
-                self.grasp.close(force=30.0)
-                self._grasp_close_start_frame = self.frame_count
-                return False
-            if self.grasp.is_motion_complete():
-                self._grasp_stage = GraspStage.VERIFY
-                return False
-            if self.frame_count - self._grasp_close_start_frame > 120:
-                print("[GRASP] Finger close timeout")
-                return False
-            return False
-
-        if self._grasp_stage == GraspStage.VERIFY:
-            print("[GRASP] Stage: VERIFY")
-            state = self.grasp.get_state()
-            if self.grasp.verify_grasp():
-                print(f"[GRASP] ✓ Force detected: {state.force:.1f}N")
-                self._grasp_stage = GraspStage.LIFT_TEST
-                self._grasp_stage_motion_started = False
-                return False
-            if self._grasp_retry_count < self._max_grasp_retries:
-                self._grasp_retry_count += 1
-                self._retry_offset = 0.01 * self._grasp_retry_count
-                print(f"[GRASP] ✗ No force ({state.force:.1f}N), retry {self._grasp_retry_count}/{self._max_grasp_retries}")
-                self.grasp.open()
-                self._grasp_stage = GraspStage.APPROACH
-                self._grasp_stage_motion_started = False
-                self._grasp_close_start_frame = 0
-                return False
-            print("[GRASP] ✗ Failed after max retries")
-            self._grasp_retry_count = 0
-            self.status = ExecutorStatus.FAILED
-            return False
-
-        if self._grasp_stage == GraspStage.LIFT_TEST:
-            current = self.controller.get_end_effector_position()
-            if current is None:
-                return False
-            if self._grasp_lift_start_frame and self.frame_count - self._grasp_lift_start_frame > 180:
-                print("[GRASP] Lift timeout")
+            import pybullet as p
+            object_id = primitive.object_id if primitive.object_id is not None else self._last_grasped_object_id
+            if object_id is None:
+                print("[GRASP] No object_id to attach")
                 self.status = ExecutorStatus.FAILED
                 return False
-            lift_target = np.array([current[0], current[1], current[2] + 0.05], dtype=float)
-            if not self._grasp_stage_motion_started:
-                print("[GRASP] Stage: LIFT_TEST")
-                self.controller.move_to_position_smooth(lift_target, duration=1.0)
-                self._grasp_lift_start_frame = self.frame_count
-                self._grasp_stage_motion_started = True
-                return False
-            if self.controller.is_executing():
-                self.controller.update(self.controller.sim.get_arm_state())
-                return False
-            if self.grasp.verify_grasp():
-                quality = self.grasp.get_grasp_quality() if hasattr(self.grasp, "get_grasp_quality") else 1.0
-                print(f"[GRASP] ✓ Lift test passed")
-                print(f"[GRASP] ✓ Quality: {quality:.2f}")
-                if quality > 0.5:
-                    self._grasp_stage = GraspStage.DONE
-                    self._grasp_stage_motion_started = False
-                    return False
-                if self._grasp_retry_count < self._max_grasp_retries:
-                    self._grasp_retry_count += 1
-                    self._retry_offset = 0.01 * self._grasp_retry_count
-                    print(f"[GRASP] Low quality, retrying {self._grasp_retry_count}/{self._max_grasp_retries}")
-                    self.grasp.open()
-                    self._grasp_stage = GraspStage.APPROACH
-                    self._grasp_stage_motion_started = False
-                    self._grasp_close_start_frame = 0
-                    return False
-                print("[GRASP] ✗ Low quality after retries")
-                self.status = ExecutorStatus.FAILED
-                return False
-            print("[GRASP] ✗ Object dropped during lift")
-            self.status = ExecutorStatus.FAILED
+
+            GRIPPER_LINK = 7  # gripper_base
+            robot_id = self.controller.sim.robot_id
+            client = self.controller.sim.client
+
+            self.grasp.close(force=30.0)  # visual finger animation only
+
+            obj_pos, obj_orn = p.getBasePositionAndOrientation(object_id, physicsClientId=client)
+            link_state = p.getLinkState(robot_id, GRIPPER_LINK, physicsClientId=client)
+            link_pos, link_orn = link_state[0], link_state[1]
+            inv_link_pos, inv_link_orn = p.invertTransform(link_pos, link_orn)
+            rel_pos, rel_orn = p.multiplyTransforms(inv_link_pos, inv_link_orn, obj_pos, obj_orn)
+
+            self._grasp_constraint_id = p.createConstraint(
+                parentBodyUniqueId=robot_id,
+                parentLinkIndex=GRIPPER_LINK,
+                childBodyUniqueId=object_id,
+                childLinkIndex=-1,
+                jointType=p.JOINT_FIXED,
+                jointAxis=[0, 0, 0],
+                parentFramePosition=rel_pos,
+                childFramePosition=[0, 0, 0],
+                parentFrameOrientation=rel_orn,
+                physicsClientId=client,
+            )
+            print(f"[GRASP] ✓ Magnet attached (constraint {self._grasp_constraint_id})")
+            self._last_grasped_object_id = object_id
+            self._grasp_stage = GraspStage.DONE
             return False
 
         if self._grasp_stage == GraspStage.DONE:
@@ -479,28 +439,23 @@ class PrimitiveExecutor:
         return False
 
     def _execute_release(self) -> bool:
-        """Open gripper and wait for force release."""
+        import pybullet as p
         if not self._release_started:
-            print("[RELEASE] Stage: OPEN")
-            self.grasp.open()
+            print("[RELEASE] Detaching magnet")
+            if self._grasp_constraint_id is not None:
+                p.removeConstraint(
+                    self._grasp_constraint_id,
+                    physicsClientId=self.controller.sim.client,
+                )
+                self._grasp_constraint_id = None
+            self.grasp.open()  # visual
             self._release_started = True
             self._release_start_frame = self.frame_count
             return False
-
-        if self.grasp.is_motion_complete():
-            state = self.grasp.get_state()
-            if not state.is_grasping:
-                print(f"[RELEASE] ✓ Object released (force: {state.force:.1f}N)")
-                self._release_started = False
-                self._stabilize_released_object()
-                return True
-
         if self.frame_count - self._release_start_frame > 30:
-            print("[RELEASE] Timeout (assuming released)")
             self._release_started = False
             self._stabilize_released_object()
             return True
-
         return False
 
     def _stabilize_released_object(self) -> None:
