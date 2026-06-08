@@ -115,10 +115,10 @@ proposer:
 
 # Week 4: Gemini integration
 gemini:
-  enabled: false                    # Set true when API key available
+  enabled: true
   use_fake_client: false            # Set true for testing without API
   model: "gemini-2.0-flash"
-  api_key: null                     # Or set GEMINI_API_KEY env var
+  # API key is read from GEMINI_API_KEY environment variable only.
   timeout_ms: 3000
   max_output_chars: 6000
   temperature: 0.0

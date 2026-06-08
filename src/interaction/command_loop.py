@@ -51,6 +51,18 @@ _CANCEL_WORDS = {
 }
 _PAUSE_WORDS = {"pause", "wait", "hold on", "hold", "stop for now"}
 _RESUME_WORDS = {"resume", "continue", "go", "keep going", "carry on"}
+_EXEC_STOP_WORDS = {
+    "stop",
+    "cancel",
+    "halt",
+    "abort",
+    "freeze",
+    "wait",
+    "stop it",
+    "stop now",
+    "stop that",
+}
+_EXEC_PAUSE_WORDS = {"pause", "hold on", "hold"}
 _UNDO_WORDS = {"undo", "put it back", "reverse", "go back", "undo that", "put them back"}
 _RETRY_WORDS = {"retry", "try again", "try that again", "try once more"}
 _SKIP_WORDS = {"skip", "skip that", "skip this step", "move on", "skip it", "ignore that"}
@@ -164,6 +176,8 @@ class CommandLoop:
         self._reset_planner_moved_objects()
         self._last_reported_complete = False
         self._last_reported_error = False
+        if self._interpreter is not None and hasattr(self._interpreter, "reset_context"):
+            self._interpreter.reset_context()
         if self._label_map:
             self._presenter.set_label_map(self._label_map)
         if self._bridge_monitor is not None:
@@ -583,18 +597,112 @@ class CommandLoop:
             print("\n  Something went wrong. Say 'explain' for details.")
             print(self.PROMPT, end="", flush=True)
 
+    def _poll_input_during_execution(self):
+        """
+        Non-blocking check for a stop/pause command while executing.
+
+        Returns one of: "STOP", "PAUSE", or None. Browser queue commands that
+        are not execution interrupts are put back for the normal input loop.
+        """
+        if self._browser_queue:
+            remaining = []
+            hit = None
+            while self._browser_queue:
+                cmd = self._browser_queue.popleft()
+                low = (cmd or "").strip().lower()
+                if low in _EXEC_STOP_WORDS:
+                    hit = "STOP"
+                    break
+                if low in _EXEC_PAUSE_WORDS:
+                    hit = "PAUSE"
+                    break
+                remaining.append(cmd)
+            for cmd in reversed(remaining):
+                self._browser_queue.appendleft(cmd)
+            if hit:
+                return hit
+
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        except (OSError, ValueError):
+            return None
+        if not ready:
+            return None
+
+        line = sys.stdin.readline()
+        if not line:
+            return None
+        low = line.strip().lower()
+        if low in _EXEC_STOP_WORDS:
+            return "STOP"
+        if low in _EXEC_PAUSE_WORDS:
+            return "PAUSE"
+        if low:
+            print(
+                "\n  I'm in the middle of something - say 'stop' to halt.",
+                flush=True,
+            )
+        return None
+
+    def _handle_execution_interrupt(self, kind: str) -> None:
+        """Abort or pause the running plan and report completed progress."""
+        moved = self._bin_count + self._tray_count
+        in_flight_target = self._get_current_target_label()
+
+        self._orch.cancel()
+
+        for _ in range(3):
+            self._orch.tick()
+            self._monitor_orchestrator_update()
+
+        if moved == 0:
+            if in_flight_target:
+                msg = (
+                    f"Stopped. I was reaching for the {in_flight_target}, "
+                    "but nothing's been placed in the bin yet."
+                )
+            else:
+                msg = (
+                    "Stopped. I hadn't started moving anything yet - "
+                    "nothing was placed."
+                )
+        else:
+            placed = f"{moved} item" + ("" if moved == 1 else "s")
+            if in_flight_target:
+                msg = (
+                    f"Stopped. I'd already placed {placed} and was reaching "
+                    f"for the {in_flight_target}; I won't continue with the rest."
+                )
+            else:
+                msg = (
+                    f"Stopped. I'd already placed {placed}; "
+                    "I won't start the rest."
+                )
+
+        if kind == "PAUSE":
+            msg += " (I can't pause-and-resume yet, so I halted instead.)"
+
+        print(f"\n  {msg}", flush=True)
+        self._monitor_system_response(msg)
+        self._last_reported_complete = True
+
     def _wait_for_execution_complete(
         self,
         timeout_s: float = 60.0,
     ) -> None:
         """
-        Tick orchestrator until COMPLETE, ERROR, or timeout.
-        Prints completion or error message when done.
-        Does not return to input() until execution is terminal.
+        Tick orchestrator until COMPLETE, ERROR, interrupt, or timeout.
+        Polls terminal and browser input between ticks so "stop" can halt
+        execution before the full plan finishes.
         """
         deadline = time.monotonic() + timeout_s
 
         while time.monotonic() < deadline:
+            interrupt = self._poll_input_during_execution()
+            if interrupt is not None:
+                self._handle_execution_interrupt(interrupt)
+                return
+
             self._orch.tick()
             self._monitor_orchestrator_update()
             status = self._orch.get_status()

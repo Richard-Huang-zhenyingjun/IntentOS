@@ -173,6 +173,9 @@ def main() -> int:
     n_preset_objects = len(preset_objects)
     if "world" in cfg and "messy_table" in cfg["world"]:
         cfg["world"]["messy_table"]["n_objects"] = n_preset_objects
+        cfg["world"]["messy_table"]["object_positions"] = [
+            obj["position"] for obj in preset_objects
+        ]
     object_colors = [
         _hex_to_rgba(_PRESET_HEX_COLORS.get(obj["id"], "#888888"))
         for obj in preset_objects
@@ -201,8 +204,11 @@ def main() -> int:
     logger = None
     try:
         from src.core.system_factory import build_system
+        from src.external.gemini.gemini_interpreter_adapter import (
+            GeminiInterpreterAdapter,
+        )
         from src.interaction.command_loop import CommandLoop
-        from src.interaction.intent_interpreter import IntentInterpreter
+        from src.interaction.context_aware_interpreter import ContextAwareInterpreter
         from src.interaction.session_logger import SessionLogger
         from src.intentos import IntentOSConfig, IntentOSOrchestrator
         from src.kernel import ExecutionKernel
@@ -238,8 +244,9 @@ def main() -> int:
             planner=planner,
             cfg=IntentOSConfig(planner=planner_cfg),
         )
-        gemini_adapter = getattr(system, "gemini", None)
-        interpreter = IntentInterpreter(gemini_adapter=gemini_adapter)
+        raw_gemini = getattr(system, "gemini", None)
+        gemini_adapter = GeminiInterpreterAdapter(raw_gemini) if raw_gemini else None
+        interpreter = ContextAwareInterpreter(gemini_adapter=gemini_adapter)
 
         logger = SessionLogger(preset_name=args.preset)
         loop = CommandLoop(

@@ -57,29 +57,35 @@ def build_messy_table(
     # Spawn objects on table
     bounds = world_cfg['table_bounds_xy']
     x_min, x_max, y_min, y_max = bounds
-    spawn_z = world_cfg['spawn_height_z']
+    object_positions = world_cfg.get('object_positions')
+    resting_z = 0.66  # ~3cm above table top; blocks drop and settle gently.
     
     object_ids = []
+    intended_positions = {}
     
     for i in range(n_objects):
-        # Random position on table (with rejection sampling)
-        attempts = 0
-        while attempts < 10:
-            x = np.random.uniform(x_min, x_max)
-            y = np.random.uniform(y_min, y_max)
-            
-            # Check not too close to existing objects (simple)
-            too_close = False
-            for obj_id in object_ids:
-                obj_pos = p.getBasePositionAndOrientation(obj_id)[0]
-                dist = np.linalg.norm(np.array([x, y]) - np.array(obj_pos[:2]))
-                if dist < 0.08:  # 8cm minimum spacing
-                    too_close = True
+        if object_positions and i < len(object_positions):
+            x = object_positions[i][0]
+            y = object_positions[i][1]
+        else:
+            # Random position on table (with rejection sampling)
+            attempts = 0
+            while attempts < 10:
+                x = np.random.uniform(x_min, x_max)
+                y = np.random.uniform(y_min, y_max)
+
+                # Check not too close to existing objects (simple)
+                too_close = False
+                for obj_id in object_ids:
+                    obj_pos = p.getBasePositionAndOrientation(obj_id)[0]
+                    dist = np.linalg.norm(np.array([x, y]) - np.array(obj_pos[:2]))
+                    if dist < 0.08:  # 8cm minimum spacing
+                        too_close = True
+                        break
+
+                if not too_close:
                     break
-            
-            if not too_close:
-                break
-            attempts += 1
+                attempts += 1
         
         # Create tuned cube (smaller/lighter with higher friction).
         size = 0.03  # half extent -> 6cm cubes
@@ -97,7 +103,7 @@ def build_messy_table(
             baseMass=0.08,  # 80g
             baseCollisionShapeIndex=collision,
             baseVisualShapeIndex=visual,
-            basePosition=[x, y, spawn_z]
+            basePosition=[x, y, resting_z]
         )
         p.changeDynamics(
             obj_id,
@@ -110,6 +116,7 @@ def build_messy_table(
             contactDamping=100,
         )
         object_ids.append(obj_id)
+        intended_positions[obj_id] = (x, y)
     
     print(f"[WORLD] Spawned {len(object_ids)} objects")
     
@@ -220,6 +227,22 @@ def build_messy_table(
             baseVisualShapeIndex=bin_vis,
             basePosition=pos,
         )
+
+    for oid in object_ids:
+        print(f"[DBG settle] before body={oid} pos={p.getBasePositionAndOrientation(oid)[0]}")
+
+    for _ in range(240):
+        p.stepSimulation()
+
+    for oid in object_ids:
+        pos, orn = p.getBasePositionAndOrientation(oid)
+        if abs(pos[0]) > 1.0 or abs(pos[1]) > 1.0 or pos[2] > 1.0 or pos[2] < 0.5:
+            x, y = intended_positions[oid]
+            p.resetBasePositionAndOrientation(oid, [x, y, 0.63], orn)
+            p.resetBaseVelocity(oid, [0, 0, 0], [0, 0, 0])
+
+    for oid in object_ids:
+        print(f"[DBG settle] after body={oid} pos={p.getBasePositionAndOrientation(oid)[0]}")
     
     return WorldArtifacts(
         table_id=table_id,

@@ -276,6 +276,37 @@ class PrimitiveExecutor:
         """Check if executor is currently running a plan"""
         return self.status == ExecutorStatus.RUNNING
 
+    def abort(self) -> None:
+        """
+        Immediately halt the active plan without issuing new motion.
+
+        Safe to call at any point in execution. This stops the controller in
+        place, clears the active plan, resets primitive sub-state, and returns
+        the executor to IDLE without touching the invariant checker.
+        """
+        try:
+            if hasattr(self.controller, "stop"):
+                self.controller.stop()
+            elif hasattr(self.controller, "halt"):
+                self.controller.halt()
+        except Exception:
+            pass
+
+        self.active_plan = []
+        self.plan_index = 0
+        self.active_primitive_started = False
+
+        self._reset_grasp_state()
+        self._release_started = False
+        self._grasp_legacy_fast = False
+        self._release_legacy_fast = False
+        self._openvla_wait_for_update = False
+
+        self.status = ExecutorStatus.IDLE
+        self.last_error_code = None
+
+        print("[EXECUTOR] Plan aborted by user - halted in place, no object dropped")
+
     def _reset_grasp_state(self):
         self._grasp_stage = None
         self._grasp_target_pos = None
@@ -343,7 +374,7 @@ class PrimitiveExecutor:
             return False
 
         if self._grasp_stage == GraspStage.DESCEND:
-            descend_target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + obj_height * 0.45], dtype=float)
+            descend_target = np.array([obj_pos[0], obj_pos[1], obj_pos[2]], dtype=float)
             if not self._grasp_stage_motion_started:
                 print("[GRASP] Stage: DESCEND")
                 self.controller.move_to_position_smooth(descend_target, duration=0.8)

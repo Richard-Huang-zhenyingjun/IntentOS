@@ -101,6 +101,19 @@ class PresetSceneInjector:
                     should_block_plan=True,
                 )
 
+        if failure_type == "unreachable":
+            unreachable = failure.get("unreachable_object", "")
+            if self._goal_references_object(goal, unreachable):
+                return InjectionResult(
+                    world_state=self._world_state,
+                    scene_summary=self._build_scene_summary(),
+                    pre_plan_failure=(
+                        f"I can see the {unreachable.replace('_', ' ')}, "
+                        "but it's out of reach. Nothing was executed."
+                    ),
+                    should_block_plan=True,
+                )
+
         if self._is_ambiguous(goal):
             sides = self._detect_sides()
             if len(sides) > 1:

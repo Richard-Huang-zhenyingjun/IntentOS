@@ -374,6 +374,11 @@ class HeuristicPlanner:
             deps_reach = [prev_release_id] if prev_release_id else []
 
             reach_params = obj_info if obj_info else {"target": "nearest_object"}
+            grasp_params = {
+                k: reach_params[k]
+                for k in ("target_xyz", "object_id")
+                if isinstance(reach_params, dict) and k in reach_params
+            }
             bin_params = self._resolve_bin()
 
             cycles.extend(
@@ -391,7 +396,7 @@ class HeuristicPlanner:
                         node_id=grasp_id,
                         action_type="grasp",
                         agent_id="arm",
-                        parameters={},
+                        parameters=grasp_params,
                         depends_on=[reach_id],
                         confirmation_policy=ConfirmationPolicy.NEVER,
                         uncertainty=UncertaintySignals.unknown(),
@@ -677,6 +682,11 @@ class HeuristicPlanner:
             if destination == "bin"
             else self._resolve_tray()
         )
+        grasp_params = {
+            k: reach_params[k]
+            for k in ("target_xyz", "object_id")
+            if isinstance(reach_params, dict) and k in reach_params
+        }
         return [
             TaskNode(
                 node_id="reach_0",
@@ -691,7 +701,7 @@ class HeuristicPlanner:
                 node_id="grasp_0",
                 action_type="grasp",
                 agent_id="arm",
-                parameters={},
+                parameters=grasp_params,
                 depends_on=["reach_0"],
                 confirmation_policy=ConfirmationPolicy.NEVER,
                 uncertainty=UncertaintySignals.unknown(),
@@ -726,6 +736,11 @@ class HeuristicPlanner:
             return self._safe_default_nodes("take from bin")
 
         obj = bin_objects[0]
+        grasp_params = {
+            k: obj[k]
+            for k in ("target_xyz", "object_id")
+            if isinstance(obj, dict) and k in obj
+        }
         if destination == "tray":
             dest_params = self._resolve_tray()
         else:
@@ -749,7 +764,7 @@ class HeuristicPlanner:
                 node_id="grasp_0",
                 action_type="grasp",
                 agent_id="arm",
-                parameters={},
+                parameters=grasp_params,
                 depends_on=["reach_0"],
                 confirmation_policy=ConfirmationPolicy.NEVER,
                 uncertainty=UncertaintySignals.unknown(),

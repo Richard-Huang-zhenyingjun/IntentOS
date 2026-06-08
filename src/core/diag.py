@@ -133,11 +133,11 @@ def run_startup_diagnostics(config: dict) -> DiagnosticReport:
         if gemini_cfg.get("use_fake_client", False):
             report.add_warning("Gemini enabled with fake client; real API not used.")
         else:
-            api_key = gemini_cfg.get("api_key") or os.environ.get("GEMINI_API_KEY")
+            api_key = os.environ.get("GEMINI_API_KEY")
             if not api_key:
                 report.add_warning(
-                    "Gemini enabled but no API key found in config['gemini']['api_key'] "
-                    "or GEMINI_API_KEY. Fallback proposer may be used."
+                    "Gemini enabled but GEMINI_API_KEY is not set. "
+                    "Fallback proposer may be used."
                 )
 
     # OpenVLA checks

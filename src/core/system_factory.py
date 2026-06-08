@@ -31,6 +31,7 @@ from src.input.source_eeg_mock import MockEEGSource
 from src.input.eeg.decision_source import EEGDecisionSource
 from typing import Optional
 import logging
+import os
 import yaml
 import numpy as np
 
@@ -155,6 +156,7 @@ def build_system(config: dict) -> Orchestrator:
     orchestrator.agent_registry = agent_registry
     orchestrator.arm_agent = arm_agent
     orchestrator.agent_coordinator = agent_coordinator
+    orchestrator.gemini = gemini_client
     _attach_intentos_layer(
         system=orchestrator,
         config=config,
@@ -252,6 +254,11 @@ def _build_gemini_client(config: dict):
         print("[FACTORY] Using FAKE Gemini client")
         return FakeGeminiClient()
     else:
+        if not os.environ.get("GEMINI_API_KEY"):
+            logger.warning(
+                "Gemini enabled but GEMINI_API_KEY is not set; "
+                "calls will fall back to clarification."
+            )
         from src.external.gemini.client import RealGeminiClient
         return RealGeminiClient(config)
 

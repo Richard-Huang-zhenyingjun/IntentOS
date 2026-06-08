@@ -342,6 +342,8 @@ class ArmAgent(AgentBase):
             primitive_name = "reach"
         primitive_type = PrimitiveType(primitive_name)
         metadata = {k: v for k, v in action.parameters.items() if k not in {"target_xyz", "object_id"}}
+        if action.action_type == "grasp" and action.parameters.get("target_xyz") is not None:
+            metadata["object_position"] = action.parameters["target_xyz"]
         metadata["node_id"] = action.node_id
         token_id = getattr(token, "token_id", None)
         if token_id:

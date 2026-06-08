@@ -77,11 +77,8 @@ class RealGeminiClient(GeminiClientBase):
         try:
             import google.generativeai as genai
             
-            api_key = self.config.get('gemini', {}).get('api_key')
-            if not api_key:
-                # Try environment variable
-                import os
-                api_key = os.environ.get('GEMINI_API_KEY')
+            import os
+            api_key = os.environ.get('GEMINI_API_KEY')
             
             if not api_key:
                 self._init_error = "No Gemini API key configured"
@@ -149,6 +146,5 @@ class RealGeminiClient(GeminiClientBase):
     def is_available(self) -> bool:
         self._lazy_init()
         return self._init_error is None
-
 
 
