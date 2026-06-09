@@ -262,7 +262,7 @@ class ArmAgent(AgentBase):
             timeout_s,
             action.action_type,
         )
-        return True
+        return False
 
     def _get_world_state(self):
         """Build the WorldState snapshot expected by PrimitiveExecutor.tick()."""

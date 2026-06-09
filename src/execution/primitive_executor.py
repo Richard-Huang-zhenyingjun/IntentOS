@@ -333,6 +333,7 @@ class PrimitiveExecutor:
         obj_pos = self._object_position(primitive)
         if obj_pos is None:
             print("[GRASP] Missing object_position metadata")
+            self.status = ExecutorStatus.FAILED
             return False
 
         object_id = primitive.object_id
