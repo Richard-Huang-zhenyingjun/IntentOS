@@ -87,6 +87,42 @@ class RecoveryEngine:
                 ),
             )
 
+        recoverable_keywords = {
+            "grasp_failed",
+            "grasp_no_object",
+            "unreachable",
+            "timeout",
+            "not found",
+            "missing",
+            "moved",
+            "occluded",
+            "invisible",
+        }
+        if any(keyword in reason for keyword in recoverable_keywords):
+            if retry_count < MAX_RETRIES_PER_NODE:
+                self._retry_counts[node_id] = retry_count + 1
+                return RecoveryDecision(
+                    failure_class=FailureClass.TRANSIENT,
+                    node_id=node_id,
+                    retry_count=retry_count + 1,
+                    message=(
+                        f"Recoverable failure on {node.action_type}: "
+                        f"{failure_reason}. Retry {retry_count + 1}/"
+                        f"{MAX_RETRIES_PER_NODE}."
+                    ),
+                )
+
+            self._recovery_attempts += 1
+            target = node.parameters.get("target", "object")
+            replan_goal = f"retry {node.action_type} for {target}"
+            return RecoveryDecision(
+                failure_class=FailureClass.REPLANNING,
+                node_id=node_id,
+                retry_count=retry_count,
+                message=f"Recoverable failure exhausted retries. Replanning subtask: {replan_goal}",
+                replan_goal=replan_goal,
+            )
+
         if retry_count < MAX_RETRIES_PER_NODE:
             self._retry_counts[node_id] = retry_count + 1
             return RecoveryDecision(

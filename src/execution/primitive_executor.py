@@ -101,8 +101,6 @@ class PrimitiveExecutor:
             Current status (RUNNING, COMPLETE, FAILED)
         """
         self.frame_count += 1
-        # Reset per-tick error marker unless a failure sets it this frame.
-        self.last_error_code = None
 
         # No active plan
         if not self.active_plan:
@@ -333,6 +331,7 @@ class PrimitiveExecutor:
         obj_pos = self._object_position(primitive)
         if obj_pos is None:
             print("[GRASP] Missing object_position metadata")
+            self.last_error_code = "grasp_no_object_position"
             self.status = ExecutorStatus.FAILED
             return False
 
@@ -401,6 +400,7 @@ class PrimitiveExecutor:
             object_id = primitive.object_id if primitive.object_id is not None else self._last_grasped_object_id
             if object_id is None:
                 print("[GRASP] No object_id to attach")
+                self.last_error_code = "grasp_no_object_id"
                 self.status = ExecutorStatus.FAILED
                 return False
 
@@ -416,18 +416,27 @@ class PrimitiveExecutor:
             inv_link_pos, inv_link_orn = p.invertTransform(link_pos, link_orn)
             rel_pos, rel_orn = p.multiplyTransforms(inv_link_pos, inv_link_orn, obj_pos, obj_orn)
 
-            self._grasp_constraint_id = p.createConstraint(
-                parentBodyUniqueId=robot_id,
-                parentLinkIndex=GRIPPER_LINK,
-                childBodyUniqueId=object_id,
-                childLinkIndex=-1,
-                jointType=p.JOINT_FIXED,
-                jointAxis=[0, 0, 0],
-                parentFramePosition=rel_pos,
-                childFramePosition=[0, 0, 0],
-                parentFrameOrientation=rel_orn,
-                physicsClientId=client,
-            )
+            try:
+                self._grasp_constraint_id = p.createConstraint(
+                    parentBodyUniqueId=robot_id,
+                    parentLinkIndex=GRIPPER_LINK,
+                    childBodyUniqueId=object_id,
+                    childLinkIndex=-1,
+                    jointType=p.JOINT_FIXED,
+                    jointAxis=[0, 0, 0],
+                    parentFramePosition=rel_pos,
+                    childFramePosition=[0, 0, 0],
+                    parentFrameOrientation=rel_orn,
+                    physicsClientId=client,
+                )
+            except Exception:
+                self.last_error_code = "grasp_failed"
+                self.status = ExecutorStatus.FAILED
+                return False
+            if self._grasp_constraint_id is None or self._grasp_constraint_id < 0:
+                self.last_error_code = "grasp_failed"
+                self.status = ExecutorStatus.FAILED
+                return False
             print(f"[GRASP] ✓ Magnet attached (constraint {self._grasp_constraint_id})")
             self._last_grasped_object_id = object_id
             self._grasp_stage = GraspStage.DONE

@@ -119,7 +119,7 @@ class ArmAgent(AgentBase):
 
         t0 = time.monotonic()
         try:
-            success = self._dispatch_to_executor(agent_action, token)
+            success, reason = self._dispatch_to_executor(agent_action, token)
             duration_ms = (time.monotonic() - t0) * 1000.0
             self._current_state = AgentState(
                 agent_id=self.agent_id,
@@ -131,7 +131,7 @@ class ArmAgent(AgentBase):
             return ActionResult(
                 node_id=agent_action.node_id,
                 success=success,
-                failure_reason=None if success else f"Executor returned failure for {agent_action.action_type}",
+                failure_reason=None if success else (reason or f"executor_failure_{agent_action.action_type}"),
                 world_state_delta=self._build_world_delta(agent_action, success),
                 duration_ms=duration_ms,
             )
@@ -173,7 +173,11 @@ class ArmAgent(AgentBase):
         except Exception:
             pass
 
-    def _dispatch_to_executor(self, action: AgentAction, token: Any) -> bool:
+    def _dispatch_to_executor(
+        self,
+        action: AgentAction,
+        token: Any,
+    ) -> tuple[bool, Optional[str]]:
         """
         Translate AgentAction into Phase 2 PrimitiveExecutor calls.
 
@@ -188,48 +192,50 @@ class ArmAgent(AgentBase):
         if self._executor is not None and hasattr(self._executor, f"execute_{action_type}"):
             method = getattr(self._executor, f"execute_{action_type}")
             result = method(token=token, **params)
-            return bool(result)
+            success = bool(result)
+            return success, None if success else f"executor_failure_{action_type}"
 
         if self._executor is not None and hasattr(self._executor, "execute"):
             result = self._executor.execute(action_type=action_type, params=params, token=token)
-            return bool(result)
+            success = bool(result)
+            return success, None if success else f"executor_failure_{action_type}"
 
         if self._executor is not None and hasattr(self._executor, "start_plan"):
             primitive = self._action_to_primitive(action, token)
             if primitive is None:
-                return False
+                return False, f"primitive_build_failed_{action_type}"
             self._executor.start_plan([primitive])
             if not hasattr(self._executor, "tick"):
-                return True
+                return True, None
             return self._wait_for_primitive_complete(action)
 
         # Compatibility for narrow unit tests without constructing a full executor.
         if action_type in ("reach", "move", "move_to") and self._controller is not None:
             self._controller.move_to_position(params["target_xyz"])
-            return True
+            return True, None
         if action_type == "grasp" and self._grasp is not None:
             close = getattr(self._grasp, "close", None)
             if callable(close):
                 close()
-            return True
+            return True, None
         if action_type == "release" and self._grasp is not None:
             open_ = getattr(self._grasp, "open", None)
             if callable(open_):
                 open_()
-            return True
+            return True, None
 
         logger.error(
             "PrimitiveExecutor has no method for action %r. "
             "Adapt ArmAgent._dispatch_to_executor() to match actual API.",
             action_type,
         )
-        return False
+        return False, f"executor_api_missing_{action_type}"
 
     def _wait_for_primitive_complete(
         self,
         action: AgentAction,
         timeout_s: float = 8.0,
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         """
         Tick the Phase 2 executor until this primitive actually finishes.
 
@@ -248,9 +254,9 @@ class ArmAgent(AgentBase):
 
             status = self._executor.tick(world)
             if status in (ExecutorStatus.IDLE, ExecutorStatus.COMPLETE):
-                return True
+                return True, None
             if status == ExecutorStatus.FAILED:
-                return False
+                return False, getattr(self._executor, "last_error_code", None) or "executor_failed"
 
             sim = getattr(getattr(self._executor, "controller", None), "sim", None)
             if sim is not None and hasattr(sim, "step"):
@@ -262,7 +268,7 @@ class ArmAgent(AgentBase):
             timeout_s,
             action.action_type,
         )
-        return False
+        return False, "timeout"
 
     def _get_world_state(self):
         """Build the WorldState snapshot expected by PrimitiveExecutor.tick()."""
