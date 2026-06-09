@@ -173,6 +173,28 @@ class ArmAgent(AgentBase):
         except Exception:
             pass
 
+    def reset_error(self) -> None:
+        """Reset error state so the arm can be reused after a recoverable failure."""
+        if self._current_state.status == AgentStatus.ERROR:
+            self._current_state = AgentState(
+                agent_id=self.agent_id,
+                status=AgentStatus.IDLE,
+                current_action=None,
+                error_message=None,
+                metadata={},
+            )
+
+        if self._executor is not None:
+            try:
+                from src.execution.primitive_executor import ExecutorStatus
+
+                if getattr(self._executor, "status", None) == ExecutorStatus.FAILED:
+                    self._executor.status = ExecutorStatus.IDLE
+                if hasattr(self._executor, "last_error_code"):
+                    self._executor.last_error_code = None
+            except Exception:
+                pass
+
     def _dispatch_to_executor(
         self,
         action: AgentAction,
