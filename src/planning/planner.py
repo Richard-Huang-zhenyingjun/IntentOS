@@ -364,14 +364,11 @@ class HeuristicPlanner:
         if not available:
             available = [None]
 
-        prev_release_id = None
         for i, obj_info in enumerate(available):
             reach_id = f"reach_{i}"
             grasp_id = f"grasp_{i}"
             move_id = f"move_{i}"
             release_id = f"release_{i}"
-
-            deps_reach = [prev_release_id] if prev_release_id else []
 
             reach_params = obj_info if obj_info else {"target": "nearest_object"}
             grasp_params = {
@@ -388,7 +385,7 @@ class HeuristicPlanner:
                         action_type="reach",
                         agent_id="arm",
                         parameters=reach_params,
-                        depends_on=deps_reach,
+                        depends_on=[],
                         confirmation_policy=ConfirmationPolicy.CHECKPOINT,
                         uncertainty=UncertaintySignals.unknown(),
                     ),
@@ -421,7 +418,6 @@ class HeuristicPlanner:
                     ),
                 ]
             )
-            prev_release_id = release_id
 
         return cycles
 

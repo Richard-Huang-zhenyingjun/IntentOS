@@ -63,6 +63,7 @@ class PrimitiveExecutor:
         self._release_start_frame = 0
         self._last_grasped_object_id = None
         self._grasp_constraint_id = None
+        self._force_grasp_failure = None
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
         self._openvla_wait_for_update = False
@@ -72,6 +73,35 @@ class PrimitiveExecutor:
     def set_authorization_manager(self, authorization_manager: Any):
         """Inject authorization manager after construction."""
         self.authorization_manager = authorization_manager
+
+    def force_grasp_failure(self, target: Any = True) -> None:
+        """
+        Test/debug hook: force magnet grasp failure.
+
+        Args:
+            target: True for all grasps, an object_id, an iterable of object_ids,
+                or a callable taking (object_id, primitive, executor).
+        """
+        self._force_grasp_failure = target
+
+    def clear_forced_grasp_failure(self) -> None:
+        """Disable forced magnet grasp failures."""
+        self._force_grasp_failure = None
+
+    def _should_force_grasp_failure(self, object_id: Optional[int], primitive: Primitive) -> bool:
+        target = self._force_grasp_failure
+        if target is None or target is False:
+            return False
+        if target is True:
+            return True
+        if callable(target):
+            return bool(target(object_id, primitive, self))
+        if isinstance(target, int):
+            return object_id == target
+        try:
+            return object_id in target
+        except TypeError:
+            return False
 
     @staticmethod
     def _primitive_kind(primitive: Primitive) -> str:
@@ -401,6 +431,11 @@ class PrimitiveExecutor:
             if object_id is None:
                 print("[GRASP] No object_id to attach")
                 self.last_error_code = "grasp_no_object_id"
+                self.status = ExecutorStatus.FAILED
+                return False
+            if self._should_force_grasp_failure(object_id, primitive):
+                print(f"[GRASP] Forced magnet failure for object {object_id}")
+                self.last_error_code = "grasp_failed"
                 self.status = ExecutorStatus.FAILED
                 return False
 
