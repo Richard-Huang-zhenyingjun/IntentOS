@@ -21,6 +21,7 @@ class SceneSummarizer:
         self.min_objects = messy_cfg.get('min_objects', 3)
         self.spread_threshold = messy_cfg.get('spread_threshold', 0.18)
         self.z_on_table_eps = messy_cfg.get('z_on_table_eps', 0.04)
+        self.object_height = messy_cfg.get('object_height', 0.06)
         self.table_top_z = 0.6  # TODO: get from world artifacts
     
     def summarize(
@@ -60,10 +61,7 @@ class SceneSummarizer:
                     continue
                 
                 obj_z = obj_pos[2]
-                is_on_table = (
-                    abs(obj_z - self.table_top_z) < self.z_on_table_eps
-                    and obj_z > self.table_top_z
-                )
+                is_on_table = self._is_on_table_z(obj_z)
                 
                 info = ObjectInfo(
                     object_id=obj_id,
@@ -81,10 +79,7 @@ class SceneSummarizer:
                     try:
                         pos, _ = p.getBasePositionAndOrientation(obj_id)
                         obj_z = pos[2]
-                        is_on_table = (
-                            abs(obj_z - self.table_top_z) < self.z_on_table_eps
-                            and obj_z > self.table_top_z
-                        )
+                        is_on_table = self._is_on_table_z(obj_z)
                         
                         info = ObjectInfo(
                             object_id=obj_id,
@@ -133,5 +128,11 @@ class SceneSummarizer:
         max_area = 0.3
         return min(1.0, bbox_area / max_area)
 
+    def _is_on_table_z(self, obj_z: float) -> bool:
+        """Return True when an object's center is resting above the tabletop."""
+        return (
+            obj_z > self.table_top_z
+            and obj_z <= self.table_top_z + self.object_height + self.z_on_table_eps
+        )
 
 

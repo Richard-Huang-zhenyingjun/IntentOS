@@ -228,9 +228,6 @@ def build_messy_table(
             basePosition=pos,
         )
 
-    for oid in object_ids:
-        print(f"[DBG settle] before body={oid} pos={p.getBasePositionAndOrientation(oid)[0]}")
-
     for _ in range(240):
         p.stepSimulation()
 
@@ -241,9 +238,6 @@ def build_messy_table(
             p.resetBasePositionAndOrientation(oid, [x, y, 0.63], orn)
             p.resetBaseVelocity(oid, [0, 0, 0], [0, 0, 0])
 
-    for oid in object_ids:
-        print(f"[DBG settle] after body={oid} pos={p.getBasePositionAndOrientation(oid)[0]}")
-    
     return WorldArtifacts(
         table_id=table_id,
         object_ids=object_ids,

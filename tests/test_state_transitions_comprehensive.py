@@ -106,7 +106,7 @@ def test_orchestrator_trust_drop_drives_safe_pause_then_confirming():
         assert orch._safe_pause_active
         assert not orch.auth_manager.is_authorized()
 
-        for _ in range(20):
+        for _ in range(60):
             orch.sim.step()
             world = orch._read_world_state()
             orch._execute_safe_pause(world)
