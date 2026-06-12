@@ -406,7 +406,7 @@ def test_transient_failure_retries_before_escalation(tmp_path):
     assert orch.state == IntentOSState.ERROR
 
 
-def test_replanning_failure_starts_new_planning_cycle_with_checkpoint(tmp_path):
+def test_recoverable_failure_exhaustion_skips_node_and_completes(tmp_path):
     graph = make_graph(
         [
             TaskNode(
@@ -430,9 +430,10 @@ def test_replanning_failure_starts_new_planning_cycle_with_checkpoint(tmp_path):
     tick_until_not_planning(orch)
     tick_until_not_planning(orch)
     tick_until_not_planning(orch)
+    tick_until_not_planning(orch)
 
-    assert graph.nodes[0].status == TaskStatus.FAILED
+    assert graph.nodes[0].status == TaskStatus.SKIPPED
     assert len(agent.actions) == 3
-    assert planner.calls[-1] == ("retry reach for red_block", "")
-    assert len(kernel.submitted) == 2
-    assert orch.state == IntentOSState.AWAITING_CONFIRM
+    assert planner.calls == [("clean the table", "scene")]
+    assert len(kernel.submitted) == 1
+    assert orch.state == IntentOSState.COMPLETE

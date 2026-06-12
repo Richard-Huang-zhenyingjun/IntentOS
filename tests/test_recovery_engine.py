@@ -56,7 +56,7 @@ def test_retry_count_below_max_returns_transient_and_increments():
     assert engine._retry_counts[node.node_id] == MAX_RETRIES_PER_NODE
 
 
-def test_object_failure_after_max_retries_returns_replanning():
+def test_object_failure_after_max_retries_returns_skip():
     engine = RecoveryEngine()
     node = make_node(action_type="grasp", target="red_block")
     graph = make_graph(node)
@@ -65,10 +65,10 @@ def test_object_failure_after_max_retries_returns_replanning():
         engine.classify(node, graph, "temporary slip")
     decision = engine.classify(node, graph, "object moved")
 
-    assert decision.failure_class == FailureClass.REPLANNING
+    assert decision.failure_class == FailureClass.SKIP
     assert decision.retry_count == MAX_RETRIES_PER_NODE
-    assert decision.replan_goal == "retry grasp for red_block"
-    assert engine._recovery_attempts == 1
+    assert decision.replan_goal is None
+    assert engine._recovery_attempts == 0
 
 
 def test_default_after_max_retries_escalates():
@@ -85,12 +85,23 @@ def test_default_after_max_retries_escalates():
     assert engine._recovery_attempts == 1
 
 
-def test_recovery_attempt_limit_escalates_before_retry():
+def test_recovery_attempt_limit_does_not_block_recoverable_retry():
     engine = RecoveryEngine()
     engine._recovery_attempts = MAX_RECOVERY_ATTEMPTS_PER_PLAN
     node = make_node()
 
     decision = engine.classify(node, make_graph(node), "temporary timeout")
+
+    assert decision.failure_class == FailureClass.TRANSIENT
+    assert decision.retry_count == 1
+
+
+def test_recovery_attempt_limit_escalates_nonrecoverable_failure():
+    engine = RecoveryEngine()
+    engine._recovery_attempts = MAX_RECOVERY_ATTEMPTS_PER_PLAN
+    node = make_node()
+
+    decision = engine.classify(node, make_graph(node), "still failing")
 
     assert decision.failure_class == FailureClass.ESCALATION
     assert "Exceeded" in decision.escalation_reason

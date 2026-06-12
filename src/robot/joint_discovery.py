@@ -30,12 +30,22 @@ def guess_end_effector_link(body_id: int, joint_indices: list[int]) -> int:
     """
     Heuristic to find end effector link index.
     Priority:
-    1. Link name contains 'ee', 'eef', 'end', 'tool', 'tcp'
-    2. Last revolute joint's child link
+    1. Last revolute joint's child link (wrist/link6) for reachable IK.
+       The controller compensates the fixed gripper_base offset in software.
+    2. Link name contains 'ee', 'eef', 'end', 'tool', 'tcp'
     """
     num_joints = p.getNumJoints(body_id)
+
+    # Strategy 1: Use the wrist link for IK. The fixed gripper_base link is
+    # 10cm past this link and is compensated by RobotController.
+    if joint_indices:
+        last_joint = joint_indices[-1]
+        link_info = p.getJointInfo(body_id, last_joint)
+        link_name = link_info[12].decode("utf-8")
+        print(f"[DISCOVERY] Using wrist EE link: {link_name} (index={last_joint})")
+        return last_joint
     
-    # Strategy 1: Search by name
+    # Strategy 2: Search by name
     for i in range(num_joints):
         link_info = p.getJointInfo(body_id, i)
         link_name = link_info[12].decode('utf-8').lower()  # Link name
@@ -43,13 +53,7 @@ def guess_end_effector_link(body_id: int, joint_indices: list[int]) -> int:
         if any(keyword in link_name for keyword in ['ee', 'eef', 'end', 'tool', 'tcp']):
             print(f"[DISCOVERY] Found EE link by name: {link_name} (index={i})")
             return i
-    
-    # Strategy 2: Use last revolute joint
-    if joint_indices:
-        last_joint = joint_indices[-1]
-        print(f"[DISCOVERY] Using last revolute joint as EE: index={last_joint}")
-        return last_joint
-    
+
     # Fallback
     print(f"[DISCOVERY] WARNING: Using default EE link index={num_joints-1}")
     return num_joints - 1
@@ -104,4 +108,3 @@ def get_gripper_link_index(body_id: int, link_name: str = "gripper_base") -> int
         if link_name in child_link:
             return i + 1
     return -1
-

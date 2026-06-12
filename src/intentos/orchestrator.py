@@ -514,8 +514,17 @@ class IntentOSOrchestrator:
             self._context.last_error = decision.message
 
         if decision.failure_class == FailureClass.TRANSIENT:
+            self._reset_agent_error(node.agent_id)
             node.status = TaskStatus.PENDING
             logger.info("Recovery: retry node %s", node.node_id)
+        elif decision.failure_class == FailureClass.SKIP:
+            self._skip_downstream_chain(graph, node.node_id, decision.message)
+            self._reset_agent_error(node.agent_id)
+            if self._context is not None:
+                self._context.nodes_completed = sum(
+                    1 for graph_node in graph.nodes if graph_node.status == TaskStatus.DONE
+                )
+            logger.info("Recovery: skipped node chain from %s", node.node_id)
         elif decision.failure_class == FailureClass.REPLANNING:
             self._invalidate_downstream(graph, node.node_id)
             self._pending_goal = (decision.replan_goal, "")
@@ -529,6 +538,13 @@ class IntentOSOrchestrator:
                 "Recovery: escalation - %s. All agents stopped.",
                 decision.escalation_reason,
             )
+
+    def _reset_agent_error(self, agent_id: str) -> None:
+        """Clear a recoverable agent error so sibling task chains can continue."""
+        agent = self._registry.get(agent_id)
+        reset_error = getattr(agent, "reset_error", None)
+        if callable(reset_error):
+            reset_error()
 
     def _current_segment(self) -> Optional[CheckpointSegment]:
         if 0 <= self._current_segment_idx < len(self._segments):
@@ -616,6 +632,27 @@ class IntentOSOrchestrator:
         for node in graph.nodes:
             if node.node_id in affected and node.status == TaskStatus.PENDING:
                 node.status = TaskStatus.INVALIDATED
+
+    @staticmethod
+    def _skip_downstream_chain(
+        graph: TaskGraph,
+        failed_node_id: str,
+        reason: str,
+    ) -> None:
+        """Mark a failed node and its downstream object chain as skipped."""
+
+        def downstream(node_id: str, visited: set[str]) -> set[str]:
+            visited.add(node_id)
+            for candidate in graph.nodes:
+                if node_id in candidate.depends_on and candidate.node_id not in visited:
+                    downstream(candidate.node_id, visited)
+            return visited
+
+        affected = downstream(failed_node_id, set())
+        for node in graph.nodes:
+            if node.node_id in affected and node.status != TaskStatus.DONE:
+                node.status = TaskStatus.SKIPPED
+                node.error = reason
 
     @staticmethod
     def _restore_downstream_pending(graph: TaskGraph, node_id: str) -> None:

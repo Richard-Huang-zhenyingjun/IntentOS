@@ -1,3 +1,5 @@
+import pybullet as p
+
 from src.core.schema import ArmActionType, ArmDecision, ArmUIState, DecisionSignal
 from src.core.state_machine import StateMachine
 from src.core.system_factory import build_system, load_config
@@ -94,7 +96,21 @@ def test_orchestrator_trust_drop_drives_safe_pause_then_confirming():
         def _update_fast(_current_state):
             if not controller.executing:
                 return False
+            if controller._trajectory:
+                final_waypoint = controller._trajectory[-1]
+                for joint_idx, joint_pos in zip(
+                    controller.joint_indices,
+                    final_waypoint.joint_positions,
+                ):
+                    p.resetJointState(
+                        controller.sim.robot_id,
+                        joint_idx,
+                        joint_pos,
+                        physicsClientId=controller.sim.client,
+                    )
             controller.executing = False
+            controller._trajectory = None
+            controller._trajectory_index = 0
             controller.target_joints = None
             controller._settle_counter = 0
             return True

@@ -46,25 +46,10 @@ def _patch_ik_compat(orch):
     """
     Test-local compatibility patch for PyBullet IK signature variants.
     """
-    controller = orch.executor.controller
-
-    def _compute_ik_compat(target_xyz: np.ndarray):
-        try:
-            return p.calculateInverseKinematics(
-                bodyIndex=controller.sim.robot_id,
-                endEffectorLinkIndex=controller.ee_link_index,
-                targetPosition=target_xyz.tolist(),
-                maxNumIterations=100,
-                residualThreshold=0.001,
-            )
-        except TypeError:
-            return p.calculateInverseKinematics(
-                bodyIndex=controller.sim.robot_id,
-                endEffectorLinkIndex=controller.ee_link_index,
-                targetPosition=target_xyz.tolist(),
-            )
-
-    controller._compute_ik = _compute_ik_compat
+    # The production controller now owns limit-aware IK, angle wrapping, and
+    # link6/link7 compensation. Keep this hook as a no-op for older test setup
+    # call sites instead of replacing the production IK with a stale shim.
+    return None
 
 
 def _patch_deterministic_execution(orch):
@@ -80,6 +65,31 @@ def _patch_deterministic_execution(orch):
     def _update_fast(current_state):
         if not controller.executing:
             return False
+        if controller._trajectory:
+            final_waypoint = controller._trajectory[-1]
+            for joint_idx, joint_pos in zip(
+                controller.joint_indices,
+                final_waypoint.joint_positions,
+            ):
+                p.resetJointState(
+                    controller.sim.robot_id,
+                    joint_idx,
+                    float(joint_pos),
+                    physicsClientId=controller.sim.client,
+                )
+            controller._trajectory = None
+            controller._trajectory_index = 0
+        elif controller.target_joints is not None:
+            for joint_idx, joint_pos in zip(
+                controller.joint_indices,
+                controller.target_joints,
+            ):
+                p.resetJointState(
+                    controller.sim.robot_id,
+                    joint_idx,
+                    float(joint_pos),
+                    physicsClientId=controller.sim.client,
+                )
         controller.executing = False
         controller.target_joints = None
         controller._settle_counter = 0

@@ -154,6 +154,7 @@ class CheckpointPlanner:
         result: list[TaskNode] = []
 
         while queue:
+            queue.sort(key=lambda node_id: CheckpointPlanner._object_chain_sort_key(node_id))
             node_id = queue.pop(0)
             result.append(nodes_by_id[node_id])
             for neighbor in adjacency[node_id]:
@@ -162,3 +163,20 @@ class CheckpointPlanner:
                     queue.append(neighbor)
 
         return result
+
+    @staticmethod
+    def _object_chain_sort_key(node_id: str) -> tuple[int, int, int]:
+        """Prefer reach_i -> grasp_i -> move_i -> release_i before reach_{i+1}."""
+        phase_ranks = {
+            "reach": 0,
+            "grasp": 1,
+            "move": 2,
+            "release": 3,
+        }
+        try:
+            phase, suffix = node_id.rsplit("_", 1)
+        except ValueError:
+            return (1, 0, 0)
+        if phase not in phase_ranks or not suffix.isdigit():
+            return (1, 0, 0)
+        return (0, int(suffix), phase_ranks[phase])

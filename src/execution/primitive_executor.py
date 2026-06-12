@@ -62,6 +62,7 @@ class PrimitiveExecutor:
         self._release_started = False
         self._release_start_frame = 0
         self._last_grasped_object_id = None
+        self._last_move_target_xyz = None
         self._grasp_constraint_id = None
         self._force_grasp_failure = None
         self._grasp_legacy_fast = False
@@ -211,6 +212,7 @@ class PrimitiveExecutor:
         if kind in ("reach", "move_to"):
             # Use controller from Week 0
             if primitive.target_xyz is None:
+                self.last_error_code = "move_no_target"
                 return False
             if isinstance(self.controller, RobotController):
                 duration = 1.5 if kind == "reach" else 2.0
@@ -221,6 +223,10 @@ class PrimitiveExecutor:
             else:
                 # Preserve legacy behavior for unit-test mocks.
                 self.controller.move_to_position(primitive.target_xyz)
+            if getattr(self.controller, "last_motion_error", None) == "ik_out_of_limits":
+                self.last_error_code = "ik_out_of_limits"
+                self.status = ExecutorStatus.FAILED
+                return False
             return True
         
         elif kind == "grasp":
@@ -274,7 +280,51 @@ class PrimitiveExecutor:
             # Check controller convergence (Week 0 pattern)
             if world.arm is None:
                 return False
-            return self.controller.update(world.arm)
+            done = self.controller.update(world.arm)
+            if not done:
+                return False
+
+            target = primitive.target_xyz
+            if target is None:
+                return True
+
+            try:
+                import pybullet as p
+
+                ee_idx = 7  # gripper_base / magnet link; target_xyz is link7-space.
+                robot_id = self.controller.sim.robot_id
+                client = self.controller.sim.client
+                ee_pos = p.getLinkState(
+                    robot_id,
+                    ee_idx,
+                    physicsClientId=client,
+                )[0]
+            except Exception:
+                # If pose verification is unavailable, preserve legacy success.
+                return True
+
+            dist = (
+                (ee_pos[0] - target[0]) ** 2
+                + (ee_pos[1] - target[1]) ** 2
+                + (ee_pos[2] - target[2]) ** 2
+            ) ** 0.5
+            table_top_z = 0.6
+            if ee_pos[2] < table_top_z:
+                print(f"[MOVE] Invalid pose: EE below table (z={ee_pos[2]:.3f})")
+                self.last_error_code = "move_invalid_pose"
+                self.status = ExecutorStatus.FAILED
+                return False
+
+            arrival_tol = 0.10
+            if dist > arrival_tol:
+                print(f"[MOVE] Not arrived: dist={dist:.3f} to target {target}")
+                self.last_error_code = "move_not_arrived"
+                self.status = ExecutorStatus.FAILED
+                return False
+
+            if kind == "move_to":
+                self._last_move_target_xyz = list(target)
+            return True
         
         elif kind == "grasp":
             if self._grasp_legacy_fast:
@@ -389,6 +439,10 @@ class PrimitiveExecutor:
             if not self._grasp_stage_motion_started:
                 print("[GRASP] Stage: APPROACH")
                 self.controller.move_to_position_smooth(approach_target, duration=1.2)
+                if getattr(self.controller, "last_motion_error", None) == "ik_out_of_limits":
+                    self.last_error_code = "ik_out_of_limits"
+                    self.status = ExecutorStatus.FAILED
+                    return False
                 self._grasp_stage_motion_started = True
                 self._grasp_stage_start_frame = self.frame_count
                 return False
@@ -409,6 +463,10 @@ class PrimitiveExecutor:
             if not self._grasp_stage_motion_started:
                 print("[GRASP] Stage: DESCEND")
                 self.controller.move_to_position_smooth(descend_target, duration=0.8)
+                if getattr(self.controller, "last_motion_error", None) == "ik_out_of_limits":
+                    self.last_error_code = "ik_out_of_limits"
+                    self.status = ExecutorStatus.FAILED
+                    return False
                 self._grasp_stage_motion_started = True
                 self._grasp_stage_start_frame = self.frame_count
                 return False
@@ -524,9 +582,12 @@ class PrimitiveExecutor:
                 obj_id,
                 physicsClientId=client,
             )
-            safe_x = max(-0.6, min(0.6, pos[0]))
-            safe_y = max(-0.4, min(0.4, pos[1]))
-            safe_z = max(0.55, min(0.85, pos[2]))
+            if self._last_move_target_xyz is not None:
+                safe_x, safe_y, safe_z = self._last_move_target_xyz
+            else:
+                safe_x = max(-0.6, min(0.6, pos[0]))
+                safe_y = max(-0.4, min(0.4, pos[1]))
+                safe_z = max(0.55, min(0.85, pos[2]))
             p.resetBasePositionAndOrientation(
                 obj_id,
                 [safe_x, safe_y, safe_z],
@@ -540,6 +601,7 @@ class PrimitiveExecutor:
                 physicsClientId=client,
             )
             self._last_grasped_object_id = None
+            self._last_move_target_xyz = None
         except Exception:
             pass
 

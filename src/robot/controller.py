@@ -7,7 +7,13 @@ import numpy as np
 import pybullet as p
 from typing import Optional
 from src.robot.simulator import RobotSimulator, ArmState
-from src.planning.trajectory import TrajectoryInterpolator, Waypoint
+from src.planning.trajectory import (
+    IKOutOfLimitsError,
+    TrajectoryInterpolator,
+    Waypoint,
+    calculate_limited_tool_down_ik,
+    get_ik_limits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,9 @@ class RobotController:
         self._trajectory: Optional[list[Waypoint]] = None
         self._trajectory_index = 0
         self._trajectory_start_time = 0.0
+        self.last_motion_error: Optional[str] = None
+        self.last_ik_orientation = None
+        self.last_ik_orientation_offsets = None
         
         print(f"[CTRL] Initialized with {len(self.joint_indices)} joints")
         print(f"[CTRL] max_force={self.max_force}, tolerance={self.tolerance_rad}")
@@ -62,6 +71,7 @@ class RobotController:
         velocity: float = 0.5,
     ):
         """Start moving to target position (does NOT wait for completion)."""
+        self.last_motion_error = None
         # Compute IK
         ik_result = self._compute_ik(target_xyz)
         
@@ -95,12 +105,14 @@ class RobotController:
 
     def follow_trajectory(self, waypoints: list[Waypoint]) -> None:
         """Start following a precomputed joint-space trajectory."""
+        self.last_motion_error = None
         self._trajectory = waypoints
         self._trajectory_index = 0
         self._trajectory_start_time = time.time()
         self.executing = True
         self.target_joints = None
         self.target_position = None
+        self._settle_counter = 0
 
     def update_trajectory(self, current_state: ArmState) -> bool:
         """Update trajectory execution; returns True when complete."""
@@ -116,14 +128,58 @@ class RobotController:
             and self._trajectory[self._trajectory_index].time <= elapsed
         ):
             self._trajectory_index += 1
-        if self._trajectory_index == prev_index:
+        if self._trajectory_index < len(self._trajectory) and self._trajectory_index == prev_index:
             # Keep deterministic progress in fast simulation/test loops.
             self._trajectory_index += 1
 
         if self._trajectory_index >= len(self._trajectory):
-            self._trajectory = None
-            self.executing = False
-            return True
+            final_waypoint = self._trajectory[-1]
+            try:
+                p.setJointMotorControlArray(
+                    bodyIndex=self.sim.robot_id,
+                    jointIndices=self.joint_indices,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPositions=final_waypoint.joint_positions.tolist(),
+                    forces=[self._cmd_force] * len(self.joint_indices),
+                    positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                    velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
+                    maxVelocities=[self._cmd_max_velocity] * len(self.joint_indices),
+                )
+            except TypeError:
+                p.setJointMotorControlArray(
+                    bodyIndex=self.sim.robot_id,
+                    jointIndices=self.joint_indices,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPositions=final_waypoint.joint_positions.tolist(),
+                    forces=[self._cmd_force] * len(self.joint_indices),
+                    positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                    velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
+                )
+            except Exception as exc:
+                logger.error("[CTRL] Trajectory final hold failed: %s", exc)
+                self._trajectory = None
+                self.executing = False
+                return False
+            self._apply_kinematic_joint_state(final_waypoint.joint_positions)
+
+            current_state = self.sim.get_arm_state()
+            current_joints = np.array(
+                [
+                    current_state.joint_positions[i]
+                    for i in range(len(self.joint_indices))
+                ]
+            )
+            error = np.linalg.norm(current_joints - final_waypoint.joint_positions)
+            if error < self.tolerance_rad:
+                self._settle_counter += 1
+                if self._settle_counter >= self.settle_frames_required:
+                    self._trajectory = None
+                    self.executing = False
+                    self._settle_counter = 0
+                    return True
+            else:
+                self._settle_counter = 0
+            return False
 
         waypoint = self._trajectory[self._trajectory_index]
         try:
@@ -132,15 +188,27 @@ class RobotController:
                 jointIndices=self.joint_indices,
                 controlMode=p.POSITION_CONTROL,
                 targetPositions=waypoint.joint_positions.tolist(),
-                forces=[100.0] * len(self.joint_indices),
-                positionGains=[0.05] * len(self.joint_indices),
-                velocityGains=[0.5] * len(self.joint_indices),
+                forces=[self._cmd_force] * len(self.joint_indices),
+                positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
+                maxVelocities=[self._cmd_max_velocity] * len(self.joint_indices),
+            )
+        except TypeError:
+            p.setJointMotorControlArray(
+                bodyIndex=self.sim.robot_id,
+                jointIndices=self.joint_indices,
+                controlMode=p.POSITION_CONTROL,
+                targetPositions=waypoint.joint_positions.tolist(),
+                forces=[self._cmd_force] * len(self.joint_indices),
+                positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
+                velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
             )
         except Exception as exc:
             logger.error("[CTRL] Trajectory update failed: %s", exc)
             self._trajectory = None
             self.executing = False
             return False
+        self._apply_kinematic_joint_state(waypoint.joint_positions)
 
         return False
 
@@ -154,14 +222,28 @@ class RobotController:
         timestep = 1.0 / 60.0
         num_waypoints = max(2, int(duration / timestep))
         interp = TrajectoryInterpolator(duration=duration, timestep=timestep)
-        waypoints = interp.interpolate_cartesian(
-            robot_id=self.sim.robot_id,
-            ee_link_index=self.ee_link_index,
-            joint_count=len(self.joint_indices),
-            start_cart=np.array(current_cart, dtype=float),
-            end_cart=np.array(target_cart, dtype=float),
-            num_waypoints=num_waypoints,
-        )
+        rest_pose = [
+            float(v)
+            for v in self.sim.get_arm_state().joint_positions[: len(self.joint_indices)]
+        ]
+        try:
+            waypoints = interp.interpolate_cartesian(
+                robot_id=self.sim.robot_id,
+                ee_link_index=self.ee_link_index,
+                joint_count=len(self.joint_indices),
+                start_cart=np.array(current_cart, dtype=float),
+                end_cart=np.array(target_cart, dtype=float),
+                num_waypoints=num_waypoints,
+                arm_joint_indices=self.joint_indices,
+                rest_pose=rest_pose,
+            )
+            self.last_ik_orientation = interp.last_orientation
+            self.last_ik_orientation_offsets = interp.last_orientation_offsets
+        except IKOutOfLimitsError as exc:
+            print(f"[CTRL-IK] IK out of limits for target {target_cart}: {exc}")
+            self.last_motion_error = "ik_out_of_limits"
+            self.stop()
+            return
         self.follow_trajectory(waypoints)
     
     def update(self, current_state: ArmState) -> bool:
@@ -212,8 +294,10 @@ class RobotController:
                 positionGains=[self._cmd_pos_gain] * len(self.joint_indices),
                 velocityGains=[self._cmd_vel_gain] * len(self.joint_indices),
             )
+        self._apply_kinematic_joint_state(self.target_joints)
         
         # Compute error
+        current_state = self.sim.get_arm_state()
         current_joints = np.array([current_state.joint_positions[i] for i in range(len(self.joint_indices))])
         error = np.linalg.norm(current_joints - self.target_joints)
         
@@ -245,34 +329,60 @@ class RobotController:
             self._settle_counter = 0  # Reset if error increases
         
         return False  # Still executing
+
+    def _apply_kinematic_joint_state(self, joint_positions: np.ndarray) -> None:
+        """Keep the PyBullet sim stable by applying commanded joint states."""
+        for joint_idx, joint_pos in zip(self.joint_indices, joint_positions):
+            p.resetJointState(
+                self.sim.robot_id,
+                joint_idx,
+                float(joint_pos),
+                physicsClientId=self.sim.client,
+            )
     
     def _compute_ik(self, target_xyz: np.ndarray):
         """Compute inverse kinematics using discovered EE link"""
         print(f"[CTRL-IK] Computing IK for target: {target_xyz}")
         try:
-            # Some pybullet builds reject optional kwargs, so fallback cleanly.
-            try:
-                ik_result = p.calculateInverseKinematics(
-                    bodyIndex=self.sim.robot_id,
-                    endEffectorLinkIndex=self.ee_link_index,  # Use discovered index
-                    targetPosition=target_xyz.tolist(),
-                    maxNumIterations=100,
-                    residualThreshold=0.001
-                )
-            except TypeError:
-                ik_result = p.calculateInverseKinematics(
-                    bodyIndex=self.sim.robot_id,
-                    endEffectorLinkIndex=self.ee_link_index,
-                    targetPosition=target_xyz.tolist(),
-                )
+            arm_state = self.sim.get_arm_state()
+            rest_pose = None
+            if arm_state is not None:
+                rest_pose = [
+                    float(v)
+                    for v in arm_state.joint_positions[: len(self.joint_indices)]
+                ]
+            lower, upper, ranges, rest = get_ik_limits(
+                self.sim.robot_id,
+                self.joint_indices,
+                rest_pose=rest_pose,
+            )
+            ik_result, orientation, offsets, _ = calculate_limited_tool_down_ik(
+                robot_id=self.sim.robot_id,
+                ee_link_index=self.ee_link_index,
+                desired_link7_position=target_xyz.tolist(),
+                lower=lower,
+                upper=upper,
+                ranges=ranges,
+                rest=rest,
+                joint_count=len(self.joint_indices),
+            )
+            self.last_ik_orientation = orientation
+            self.last_ik_orientation_offsets = offsets
             
             if ik_result:
                 n = len(self.joint_indices)
-                print(f"[CTRL-IK] IK solution ({n} joints): {ik_result[:n]}")
+                print(
+                    f"[CTRL-IK] IK solution ({n} joints, "
+                    f"orientation_offsets={offsets}): {ik_result[:n]}"
+                )
                 return ik_result
             else:
                 print("[CTRL-IK] IK returned empty result")
                 return None
+        except IKOutOfLimitsError as e:
+            print(f"[CTRL-IK] IK out of limits: {e}")
+            self.last_motion_error = "ik_out_of_limits"
+            return None
         except Exception as e:
             print(f"[CTRL-IK] IK failed: {e}")
             return None

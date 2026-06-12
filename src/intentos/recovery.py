@@ -23,6 +23,7 @@ MAX_RECOVERY_ATTEMPTS_PER_PLAN = 3
 class FailureClass(Enum):
     TRANSIENT = auto()
     REPLANNING = auto()
+    SKIP = auto()
     ESCALATION = auto()
 
 
@@ -73,20 +74,6 @@ class RecoveryEngine:
                 escalation_reason=failure_reason,
             )
 
-        if self._recovery_attempts >= MAX_RECOVERY_ATTEMPTS_PER_PLAN:
-            return RecoveryDecision(
-                failure_class=FailureClass.ESCALATION,
-                node_id=node_id,
-                retry_count=retry_count,
-                message=(
-                    f"Too many recovery attempts ({self._recovery_attempts}). "
-                    "Human intervention needed."
-                ),
-                escalation_reason=(
-                    f"Exceeded {MAX_RECOVERY_ATTEMPTS_PER_PLAN} recovery attempts"
-                ),
-            )
-
         recoverable_keywords = {
             "grasp_failed",
             "grasp_no_object",
@@ -95,6 +82,9 @@ class RecoveryEngine:
             "not found",
             "missing",
             "moved",
+            "move_invalid_pose",
+            "move_not_arrived",
+            "ik_out_of_limits",
             "occluded",
             "invisible",
         }
@@ -112,15 +102,28 @@ class RecoveryEngine:
                     ),
                 )
 
-            self._recovery_attempts += 1
-            target = node.parameters.get("target", "object")
-            replan_goal = f"retry {node.action_type} for {target}"
             return RecoveryDecision(
-                failure_class=FailureClass.REPLANNING,
+                failure_class=FailureClass.SKIP,
                 node_id=node_id,
                 retry_count=retry_count,
-                message=f"Recoverable failure exhausted retries. Replanning subtask: {replan_goal}",
-                replan_goal=replan_goal,
+                message=(
+                    f"Recoverable failure on {node.action_type} exhausted "
+                    "retries. Skipping this object and continuing."
+                ),
+            )
+
+        if self._recovery_attempts >= MAX_RECOVERY_ATTEMPTS_PER_PLAN:
+            return RecoveryDecision(
+                failure_class=FailureClass.ESCALATION,
+                node_id=node_id,
+                retry_count=retry_count,
+                message=(
+                    f"Too many recovery attempts ({self._recovery_attempts}). "
+                    "Human intervention needed."
+                ),
+                escalation_reason=(
+                    f"Exceeded {MAX_RECOVERY_ATTEMPTS_PER_PLAN} recovery attempts"
+                ),
             )
 
         if retry_count < MAX_RETRIES_PER_NODE:

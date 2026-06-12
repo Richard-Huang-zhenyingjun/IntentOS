@@ -83,6 +83,7 @@ class AgentCoordinator:
         completion_times: dict[str, float] = {}
         active_agents: set[str] = set()
         last_progress = time.monotonic()
+        segment_failed = False
 
         while True:
             ready = self._ready_to_dispatch(
@@ -92,7 +93,8 @@ class AgentCoordinator:
                 completion_times=completion_times,
             )
 
-            for node in ready:
+            ready_to_dispatch = [] if segment_failed else ready
+            for node in ready_to_dispatch:
                 if node.agent_id in active_agents:
                     continue
                 if not self._try_claim_resources(node):
@@ -110,6 +112,7 @@ class AgentCoordinator:
                         duration_ms=0.0,
                     )
                     self._invalidate_downstream_in_segment(segment_nodes, node.node_id)
+                    segment_failed = True
                     self._release_resources(node.node_id)
                     last_progress = time.monotonic()
                     continue
@@ -153,9 +156,13 @@ class AgentCoordinator:
                     if not result.success:
                         node.error = result.failure_reason
                         self._invalidate_downstream_in_segment(segment_nodes, node_id)
+                        segment_failed = True
                     active_agents.discard(node.agent_id)
                 self._release_resources(node_id)
                 last_progress = time.monotonic()
+
+            if segment_failed and not pending_futures:
+                break
 
             all_terminal = all(node.is_terminal for node in segment_nodes)
             if all_terminal and not pending_futures:
@@ -229,7 +236,85 @@ class AgentCoordinator:
                 continue
             ready.append(node)
 
-        return ready
+        return self._prioritize_object_chain_nodes(ready, segment_nodes)
+
+    @classmethod
+    def _prioritize_object_chain_nodes(
+        cls,
+        ready: list[TaskNode],
+        segment_nodes: list[TaskNode],
+    ) -> list[TaskNode]:
+        """
+        Prefer draining one reach/grasp/move/release object chain at a time.
+
+        Clean-table graphs keep object chains dependency-independent so a failed
+        object can be skipped without blocking siblings. Physically, though, the
+        arm can hold only one object. This ordering policy continues an
+        already-started object chain before starting another reach_N, without
+        adding cross-object graph dependencies.
+        """
+        if len(ready) < 2:
+            return ready
+
+        parsed_ready = [cls._object_chain_key(node) for node in ready]
+        if any(parsed is None for parsed in parsed_ready):
+            return ready
+
+        active_indices = cls._active_object_chain_indices(segment_nodes)
+        target_index = min(active_indices) if active_indices else None
+        original_order = {node.node_id: i for i, node in enumerate(ready)}
+
+        def sort_key(node: TaskNode) -> tuple[int, int, int, int]:
+            parsed = cls._object_chain_key(node)
+            assert parsed is not None
+            object_index, phase_rank = parsed
+            if target_index is None:
+                priority = 0
+            else:
+                priority = 0 if object_index == target_index else 1
+            return (priority, object_index, phase_rank, original_order[node.node_id])
+
+        return sorted(ready, key=sort_key)
+
+    @classmethod
+    def _active_object_chain_indices(cls, segment_nodes: list[TaskNode]) -> set[int]:
+        chains: dict[int, list[TaskNode]] = {}
+        for node in segment_nodes:
+            parsed = cls._object_chain_key(node)
+            if parsed is None:
+                continue
+            object_index, _ = parsed
+            chains.setdefault(object_index, []).append(node)
+
+        active = set()
+        for object_index, nodes in chains.items():
+            has_started = any(
+                node.status in (TaskStatus.DONE, TaskStatus.RUNNING)
+                for node in nodes
+            )
+            # Keep the chain active until every phase present in this segment,
+            # including release_i, reaches a terminal state. A SKIPPED chain is
+            # terminal and therefore releases the ordering lock.
+            has_open_phase = any(not node.is_terminal for node in nodes)
+            if has_started and has_open_phase:
+                active.add(object_index)
+        return active
+
+    @staticmethod
+    def _object_chain_key(node: TaskNode) -> tuple[int, int] | None:
+        phase_ranks = {
+            "reach": 0,
+            "grasp": 1,
+            "move": 2,
+            "release": 3,
+        }
+        try:
+            phase, suffix = node.node_id.rsplit("_", 1)
+        except ValueError:
+            return None
+        if phase not in phase_ranks or not suffix.isdigit():
+            return None
+        return int(suffix), phase_ranks[phase]
 
     @staticmethod
     def _dependency_delays_elapsed(

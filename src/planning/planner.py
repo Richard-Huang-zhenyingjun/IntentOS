@@ -370,11 +370,12 @@ class HeuristicPlanner:
             move_id = f"move_{i}"
             release_id = f"release_{i}"
 
-            reach_params = obj_info if obj_info else {"target": "nearest_object"}
+            object_params = obj_info if obj_info else {"target": "nearest_object"}
+            reach_params = self._reach_hover_params(object_params)
             grasp_params = {
-                k: reach_params[k]
+                k: object_params[k]
                 for k in ("target_xyz", "object_id")
-                if isinstance(reach_params, dict) and k in reach_params
+                if isinstance(object_params, dict) and k in object_params
             }
             bin_params = self._resolve_bin()
 
@@ -420,6 +421,35 @@ class HeuristicPlanner:
             )
 
         return cycles
+
+    def _reach_hover_params(self, params: dict) -> dict:
+        """Return reach params that hover above the object for link-7 control."""
+        if not isinstance(params, dict) or "target_xyz" not in params:
+            return params
+
+        hover_params = dict(params)
+        obj_pos = list(params["target_xyz"])
+        if len(obj_pos) < 3:
+            return hover_params
+
+        obj_height = 0.06
+        obj_id = params.get("object_id")
+        if obj_id is not None:
+            try:
+                import pybullet as p
+
+                aabb_min, aabb_max = p.getAABB(
+                    obj_id,
+                    physicsClientId=self._sim.client if self._sim else 0,
+                )
+                obj_height = max(0.01, float(aabb_max[2] - aabb_min[2]))
+            except Exception:
+                pass
+
+        approach_clearance = max(0.05, obj_height * 0.5)
+        obj_pos[2] = obj_pos[2] + obj_height / 2.0 + approach_clearance
+        hover_params["target_xyz"] = obj_pos
+        return hover_params
 
     def _get_available_objects(self) -> list[dict]:
         """
@@ -678,6 +708,7 @@ class HeuristicPlanner:
             if destination == "bin"
             else self._resolve_tray()
         )
+        reach_node_params = self._reach_hover_params(reach_params)
         grasp_params = {
             k: reach_params[k]
             for k in ("target_xyz", "object_id")
@@ -688,7 +719,7 @@ class HeuristicPlanner:
                 node_id="reach_0",
                 action_type="reach",
                 agent_id="arm",
-                parameters=reach_params,
+                parameters=reach_node_params,
                 depends_on=[],
                 confirmation_policy=ConfirmationPolicy.CHECKPOINT,
                 uncertainty=UncertaintySignals.unknown(),
