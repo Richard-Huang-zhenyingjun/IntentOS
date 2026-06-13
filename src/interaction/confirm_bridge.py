@@ -110,26 +110,23 @@ class ConfirmBridge:
 
         logger.info("ConfirmBridge: all guards passed. Beginning confirmation sequence.")
 
-        intentos_target, intentos_action = self._get_intentos_target_and_action()
-        if not self._drive_phase2_to_confirming(intentos_target, intentos_action):
+        authorize_for_intentos = getattr(self._phase2, "authorize_for_intentos", None)
+        if not callable(authorize_for_intentos):
             return BridgeResult(
                 success=False,
                 reason=(
-                    "The authorization system could not prepare the matching "
+                    "The authorization system could not prepare an "
                     "Phase 2 proposal. Nothing was executed."
                 ),
                 phase2_token_id=None,
                 intentos_token_id=None,
-                ticks_taken=self._last_tick_count,
+                ticks_taken=0,
                 false_executions_at_exit=self._false_executions(),
             )
 
-        self._keyboard.set_key_state(confirm=True, cancel=False)
-        try:
-            token_id = self._tick_until_auth_token(MAX_TICKS, TICK_SLEEP_S)
-            ticks_taken = self._last_tick_count
-        finally:
-            self._keyboard.set_key_state(confirm=False, cancel=False)
+        token = authorize_for_intentos(source="keyboard", quality=1.0)
+        token_id = getattr(token, "token_id", None)
+        ticks_taken = 0
 
         if token_id is None:
             return BridgeResult(
@@ -154,7 +151,6 @@ class ConfirmBridge:
             details={"phase2_token_id": token_id},
         )
         self._intentos._react_to_events([event])
-        self._intentos.tick()
 
         intentos_state_after = self._intentos.get_status().get("intentos_state", "")
         if intentos_state_after not in ("EXECUTING", "COMPLETE"):

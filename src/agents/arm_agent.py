@@ -283,6 +283,9 @@ class ArmAgent(AgentBase):
             sim = getattr(getattr(self._executor, "controller", None), "sim", None)
             if sim is not None and hasattr(sim, "step"):
                 sim.step()
+                pin = getattr(self._executor, "pin_non_active_objects", None)
+                if callable(pin):
+                    pin()
             time.sleep(0.05)
 
         logger.warning(

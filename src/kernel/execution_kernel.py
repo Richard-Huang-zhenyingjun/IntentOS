@@ -209,6 +209,26 @@ class ExecutionKernel:
         """Compatibility alias for earlier 3A tests."""
         self.assert_invariant()
 
+    def complete_authorization(self) -> None:
+        """Mark the underlying Phase 2 authorization token complete, if present."""
+        if self._auth is not None and hasattr(self._auth, "complete"):
+            self._auth.complete()
+
+    def invalidate_authorization(self, reason: str) -> None:
+        """Invalidate the underlying Phase 2 authorization token, if present."""
+        if self._auth is not None and hasattr(self._auth, "invalidate"):
+            self._auth.invalidate(reason)
+
+    def record_object_skipped(
+        self,
+        reason: str = "unreachable_skip",
+        object_index: int = 0,
+    ) -> None:
+        """Record a terminal handled skip in the underlying trust engine."""
+        trust_engine = getattr(self._orch, "trust_engine", None)
+        if trust_engine is not None and hasattr(trust_engine, "record_object_skipped"):
+            trust_engine.record_object_skipped(reason, object_index=object_index)
+
     def close(self) -> None:
         """Close the wrapped runtime if it exposes cleanup."""
         close = getattr(self._orch, "close", None)

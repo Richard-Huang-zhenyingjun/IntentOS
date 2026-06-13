@@ -236,7 +236,7 @@ def build_messy_table(
         if abs(pos[0]) > 1.0 or abs(pos[1]) > 1.0 or pos[2] > 1.0 or pos[2] < 0.5:
             x, y = intended_positions[oid]
             p.resetBasePositionAndOrientation(oid, [x, y, 0.63], orn)
-            p.resetBaseVelocity(oid, [0, 0, 0], [0, 0, 0])
+        p.resetBaseVelocity(oid, [0, 0, 0], [0, 0, 0])
 
     return WorldArtifacts(
         table_id=table_id,

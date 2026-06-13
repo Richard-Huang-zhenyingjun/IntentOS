@@ -48,6 +48,18 @@ from src.core.metrics import MetricsCollector
 logger = logging.getLogger(__name__)
 
 
+_INTENTOS_RECOVERABLE_EXECUTOR_ERRORS = {
+    "grasp_failed",
+    "grasp_no_object_id",
+    "grasp_no_object_position",
+    "move_not_arrived",
+    "move_invalid_pose",
+    "ik_out_of_limits",
+    "unreachable",
+    "timeout",
+}
+
+
 class Orchestrator:
     """
     Core orchestrator with dependency injection.
@@ -99,6 +111,8 @@ class Orchestrator:
         
         # Week 3: Build world using injected builder function
         self.world_artifacts = world_builder(sim, config)
+        if hasattr(self.executor, "set_world_objects") and self.world_artifacts is not None:
+            self.executor.set_world_objects(self.world_artifacts.object_ids)
         
         # Week 7: Event emitter
         self.events = events
@@ -377,6 +391,13 @@ class Orchestrator:
         
         elif state == 'confirming':
             if decision.signal == DecisionSignal.CONFIRM:  # C key - confirm action
+                if decision.source == "intentos_bridge":
+                    self.authorize_for_intentos(
+                        source=decision.source,
+                        quality=decision.confidence,
+                    )
+                    return
+
                 # Week 3: Compile plan using interface (only needs proposal and scene)
                 if self.current_proposal is None:
                     print("[ORCH] No proposal to compile")
@@ -401,12 +422,35 @@ class Orchestrator:
     
     def _handle_confirm(self, decision_frame: DecisionFrame):
         """Week 7: Issue token and start execution"""
+        if bool(decision_frame.metadata.get("intentos_owned", False)):
+            self.authorize_for_intentos(
+                source=decision_frame.source_type.value,
+                quality=decision_frame.quality,
+            )
+            return
+
+        self._authorize_and_start_phase2_execution(
+            source=decision_frame.source_type.value,
+            quality=decision_frame.quality,
+        )
+
+    def authorize_for_intentos(
+        self,
+        source: str = "keyboard",
+        quality: float = 1.0,
+    ):
+        """Issue Phase 2 authorization for an IntentOS-owned execution only."""
+        token = self._issue_authorization_token(source=source, quality=quality)
+        self.trust_engine.start_session(auth_quality=quality)
+        return token
+
+    def _issue_authorization_token(self, source: str, quality: float):
         scope = self.autonomy_policy.get_token_scope()
         max_objects = self.autonomy_policy.get_max_objects()
         
         token = self.auth_manager.issue(
-            source=decision_frame.source_type.value,
-            quality=decision_frame.quality,
+            source=source,
+            quality=quality,
             scope=scope,
             autonomy_level=self.autonomy_policy.level.value,
             max_objects=max_objects,
@@ -424,9 +468,14 @@ class Orchestrator:
                     'autonomy_level': token.autonomy_level,
                 },
             )
-        
+        return token
+
+    def _authorize_and_start_phase2_execution(self, source: str, quality: float):
+        """Legacy Phase 2 path: confirm, authorize, compile, and execute."""
+        self._issue_authorization_token(source=source, quality=quality)
+
         # Start trust session
-        self.trust_engine.start_session(auth_quality=decision_frame.quality)
+        self.trust_engine.start_session(auth_quality=quality)
         
         # Compile plan
         if self.current_proposal is None:
@@ -487,21 +536,29 @@ class Orchestrator:
         status = self.executor.tick(world)
         token_id = self.auth_manager.get_active_token_id()
         
-        # Week 7: Update trust from primitive results
-        # Note: PrimitiveExecutor doesn't return structured results, so we infer from status
-        # For now, we'll track failures via executor status
+        raw_error = getattr(self.executor, "last_error_code", None) or "unknown"
+        intentos_recoverable_failure = (
+            status == ExecutorStatus.FAILED
+            and self._should_preserve_auth_for_intentos_recovery(raw_error)
+        )
+
+        # Week 7: Update trust from primitive results.
+        # IntentOS-owned recoverable mechanics failures are handled by
+        # retry/skip and are accounted once at terminal SKIP, not per retry.
         if status == ExecutorStatus.FAILED:
-            raw_error = getattr(self.executor, "last_error_code", None) or "primitive_failed"
             error_code = self._map_executor_error_to_trust_code(raw_error)
-            self.trust_engine.record_primitive_result(
-                error_code=error_code,
-                object_index=self._current_object_index,
-            )
-            # Count failed object attempts for re-auth rules based on consecutive failures.
-            self.trust_engine.record_object_complete(
-                success=False,
-                object_index=self._current_object_index,
-            )
+            if not intentos_recoverable_failure:
+                self.trust_engine.record_primitive_result(
+                    error_code=error_code,
+                    object_index=self._current_object_index,
+                )
+                # Count failed object attempts for re-auth rules based on
+                # consecutive failures. Recoverable IntentOS retries skip this
+                # so trust reauth cannot preempt retry-then-skip.
+                self.trust_engine.record_object_complete(
+                    success=False,
+                    object_index=self._current_object_index,
+                )
             
             if self.events:
                 self.events.emit(
@@ -525,6 +582,8 @@ class Orchestrator:
         
         # Check plan completion
         if status == ExecutorStatus.COMPLETE:
+            if self._is_intentos_active_execution_owner():
+                return
             # Plan complete - check if this was an object completion
             # For now, assume single object per plan (simplified)
             self.trust_engine.record_object_complete(
@@ -579,7 +638,14 @@ class Orchestrator:
 
         # Failure with no re-auth trigger still ends this execution cycle.
         if status == ExecutorStatus.FAILED:
-            self._complete_task_early(f"execution_failed:{getattr(self.executor, 'last_error_code', 'unknown')}")
+            if intentos_recoverable_failure:
+                logger.info(
+                    "[ORCH] Preserving Phase 2 auth for IntentOS recoverable "
+                    "failure: %s",
+                    raw_error,
+                )
+                return
+            self._complete_task_early(f"execution_failed:{raw_error}")
             return
         
         # Continue execution (status == RUNNING)
@@ -598,6 +664,35 @@ class Orchestrator:
         if raw_error == "openvla_invalid_joint_targets":
             return "ik_fail"
         return "primitive_failed"
+
+    def _is_intentos_active_execution_owner(self) -> bool:
+        """True when IntentOS owns the currently confirmed execution."""
+        intentos = getattr(self, "intentos", None)
+        if intentos is None or not hasattr(intentos, "get_status"):
+            return False
+        try:
+            status = intentos.get_status()
+        except Exception:
+            return False
+        return (
+            status.get("intentos_state") == "EXECUTING"
+            and int(status.get("nodes_total", 0) or 0) > 0
+        )
+
+    def _should_preserve_auth_for_intentos_recovery(self, raw_error: str) -> bool:
+        """Keep the Phase 2 token alive for IntentOS-managed mechanics retries."""
+        if not self._is_intentos_active_execution_owner():
+            return False
+        reason = (raw_error or "").lower()
+        if reason == "unauthorized_execution_blocked":
+            return False
+        safety_keywords = ("collision", "safety", "emergency", "hardware")
+        if any(keyword in reason for keyword in safety_keywords):
+            return False
+        return any(
+            keyword in reason
+            for keyword in _INTENTOS_RECOVERABLE_EXECUTOR_ERRORS
+        )
     
     def _handle_awaiting_object_confirm(self, decision_frame: DecisionFrame):
         """Week 7: A1 mode - waiting for confirm between objects"""

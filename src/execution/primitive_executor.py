@@ -65,6 +65,8 @@ class PrimitiveExecutor:
         self._last_move_target_xyz = None
         self._grasp_constraint_id = None
         self._force_grasp_failure = None
+        self._world_object_ids: set[int] = set()
+        self._object_rest_poses: dict[int, tuple[list[float], list[float]]] = {}
         self._grasp_legacy_fast = False
         self._release_legacy_fast = False
         self._openvla_wait_for_update = False
@@ -74,6 +76,12 @@ class PrimitiveExecutor:
     def set_authorization_manager(self, authorization_manager: Any):
         """Inject authorization manager after construction."""
         self.authorization_manager = authorization_manager
+
+    def set_world_objects(self, object_ids: List[int] | tuple[int, ...]) -> None:
+        """Register movable world objects so non-targets can be pinned stable."""
+        self._world_object_ids = {int(obj_id) for obj_id in object_ids or []}
+        self._object_rest_poses.clear()
+        self._capture_rest_poses(self._world_object_ids, stop=True)
 
     def force_grasp_failure(self, target: Any = True) -> None:
         """
@@ -103,6 +111,89 @@ class PrimitiveExecutor:
             return object_id in target
         except TypeError:
             return False
+
+    def _capture_rest_poses(self, object_ids: set[int], stop: bool = False) -> None:
+        if not object_ids:
+            return
+        try:
+            import pybullet as p
+
+            client = self._physics_client()
+            for obj_id in object_ids:
+                pos, orn = p.getBasePositionAndOrientation(
+                    obj_id,
+                    physicsClientId=client,
+                )
+                self._object_rest_poses[int(obj_id)] = (list(pos), list(orn))
+                if stop:
+                    p.resetBaseVelocity(
+                        obj_id,
+                        [0, 0, 0],
+                        [0, 0, 0],
+                        physicsClientId=client,
+                    )
+        except Exception:
+            return
+
+    def _physics_client(self):
+        sim = getattr(self.controller, "sim", None)
+        return getattr(sim, "client", 0)
+
+    def _current_active_object_id(self) -> Optional[int]:
+        if self.active_plan and self.plan_index < len(self.active_plan):
+            primitive = self.active_plan[self.plan_index]
+            if primitive.object_id is not None:
+                return int(primitive.object_id)
+            metadata = primitive.metadata or {}
+            for key in ("object_id", "target_object_id", "target_object"):
+                value = metadata.get(key)
+                if isinstance(value, int):
+                    return int(value)
+        if self._grasp_constraint_id is not None and self._last_grasped_object_id is not None:
+            return int(self._last_grasped_object_id)
+        return None
+
+    def pin_non_active_objects(self) -> None:
+        """
+        Freeze all non-active objects at their last resting pose.
+
+        This prevents unconstrained table/bin objects from accumulating residual
+        velocity or being launched by unrelated arm motion. The active target or
+        carried object is never pinned, so pinning does not fight the magnet.
+        """
+        if not self._world_object_ids:
+            return
+        active_id = self._current_active_object_id()
+        try:
+            import pybullet as p
+
+            client = self._physics_client()
+            for obj_id in self._world_object_ids:
+                if active_id is not None and obj_id == active_id:
+                    continue
+                rest = self._object_rest_poses.get(obj_id)
+                if rest is None:
+                    pos, orn = p.getBasePositionAndOrientation(
+                        obj_id,
+                        physicsClientId=client,
+                    )
+                    rest = (list(pos), list(orn))
+                    self._object_rest_poses[obj_id] = rest
+                pos, orn = rest
+                p.resetBasePositionAndOrientation(
+                    obj_id,
+                    pos,
+                    orn,
+                    physicsClientId=client,
+                )
+                p.resetBaseVelocity(
+                    obj_id,
+                    [0, 0, 0],
+                    [0, 0, 0],
+                    physicsClientId=client,
+                )
+        except Exception:
+            return
 
     @staticmethod
     def _primitive_kind(primitive: Primitive) -> str:
@@ -600,6 +691,11 @@ class PrimitiveExecutor:
                 [0, 0, 0],
                 physicsClientId=client,
             )
+            if obj_id in self._world_object_ids:
+                self._object_rest_poses[obj_id] = (
+                    [safe_x, safe_y, safe_z],
+                    list(orn),
+                )
             self._last_grasped_object_id = None
             self._last_move_target_xyz = None
         except Exception:

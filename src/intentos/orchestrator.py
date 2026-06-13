@@ -212,9 +212,11 @@ class IntentOSOrchestrator:
                 logger.info("Human cancelled - aborting")
                 self._state = IntentOSState.ABORTED
                 self._context = None
+                self._invalidate_phase2_authorization("intentos_cancelled")
             elif event.kind == "failed":
                 logger.error("Kernel reported failure: %s", event.details)
                 self._state = IntentOSState.ERROR
+                self._invalidate_phase2_authorization("intentos_kernel_failed")
 
     def _do_planning(self) -> None:
         """
@@ -415,6 +417,7 @@ class IntentOSOrchestrator:
                 time.monotonic() - self._context.started_at,
             )
             self._state = IntentOSState.COMPLETE
+            self._complete_phase2_authorization()
 
     def _execute_node(self, node: TaskNode) -> None:
         agent = self._registry.get(node.agent_id)
@@ -520,6 +523,7 @@ class IntentOSOrchestrator:
         elif decision.failure_class == FailureClass.SKIP:
             self._skip_downstream_chain(graph, node.node_id, decision.message)
             self._reset_agent_error(node.agent_id)
+            self._record_phase2_object_skipped(node.node_id)
             if self._context is not None:
                 self._context.nodes_completed = sum(
                     1 for graph_node in graph.nodes if graph_node.status == TaskStatus.DONE
@@ -529,15 +533,38 @@ class IntentOSOrchestrator:
             self._invalidate_downstream(graph, node.node_id)
             self._pending_goal = (decision.replan_goal, "")
             self._state = IntentOSState.PLANNING
+            self._invalidate_phase2_authorization("intentos_replanning")
             logger.info("Recovery: replan from %s", decision.replan_goal)
         else:
             self._invalidate_downstream(graph, node.node_id)
             self._coordinator.emergency_stop_all()
             self._state = IntentOSState.ERROR
+            self._invalidate_phase2_authorization("intentos_escalation")
             logger.error(
                 "Recovery: escalation - %s. All agents stopped.",
                 decision.escalation_reason,
             )
+
+    def _complete_phase2_authorization(self) -> None:
+        complete_authorization = getattr(self._kernel, "complete_authorization", None)
+        if callable(complete_authorization):
+            complete_authorization()
+
+    def _invalidate_phase2_authorization(self, reason: str) -> None:
+        invalidate_authorization = getattr(self._kernel, "invalidate_authorization", None)
+        if callable(invalidate_authorization):
+            invalidate_authorization(reason)
+
+    def _record_phase2_object_skipped(self, node_id: str) -> None:
+        record_object_skipped = getattr(self._kernel, "record_object_skipped", None)
+        if not callable(record_object_skipped):
+            return
+        object_index = 0
+        try:
+            object_index = int(node_id.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            pass
+        record_object_skipped("unreachable_skip", object_index=object_index)
 
     def _reset_agent_error(self, agent_id: str) -> None:
         """Clear a recoverable agent error so sibling task chains can continue."""
