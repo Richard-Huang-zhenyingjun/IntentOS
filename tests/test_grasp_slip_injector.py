@@ -1,6 +1,6 @@
 """Tests for GraspSlipInjector and the recovery path it exercises."""
 
-from src.intentos.recovery import FailureClass, RecoveryEngine
+from src.intentos.recovery import FailureClass, MAX_RETRIES_PER_NODE, RecoveryEngine
 from src.robot.grasp_slip_injector import GraspSlipInjector
 from src.task_graph.types import TaskNode
 
@@ -97,17 +97,16 @@ def _grasp_node():
 
 
 def test_grasp_slip_classifies_transient_then_escalation():
-    """A plain grasp slip retries twice as transient, then escalates."""
+    """A plain grasp slip retries through the configured budget, then escalates."""
     engine = RecoveryEngine()
     engine.reset_plan()
     node = _grasp_node()
 
-    d1 = engine.classify(node, graph=None, failure_reason="grasp slipped")
-    assert d1.failure_class == FailureClass.TRANSIENT
+    for attempt in range(1, MAX_RETRIES_PER_NODE):
+        decision = engine.classify(node, graph=None, failure_reason="grasp slipped")
+        assert decision.failure_class == FailureClass.TRANSIENT
+        assert decision.retry_count == attempt
 
-    d2 = engine.classify(node, graph=None, failure_reason="grasp slipped")
-    assert d2.failure_class == FailureClass.TRANSIENT
-
-    d3 = engine.classify(node, graph=None, failure_reason="grasp slipped")
-    assert d3.failure_class == FailureClass.ESCALATION
-    assert "intervention" in d3.message.lower()
+    final = engine.classify(node, graph=None, failure_reason="grasp slipped")
+    assert final.failure_class == FailureClass.ESCALATION
+    assert "intervention" in final.message.lower()

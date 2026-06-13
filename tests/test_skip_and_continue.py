@@ -6,8 +6,10 @@ import pybullet as p
 import yaml
 
 from src.core.system_factory import build_system
+from src.interaction.human_presenter import HumanPresenter, SceneDescription
 from src.interaction.confirm_bridge import ConfirmBridge
 from src.intentos import IntentOSConfig, IntentOSOrchestrator
+from src.intentos.recovery import MAX_RETRIES_PER_NODE
 from src.kernel import ExecutionKernel
 from src.planning import IntentPlanner, PlannerConfig
 
@@ -185,7 +187,28 @@ def test_recoverable_first_grasp_failure_skips_and_continues_without_fling():
 
         assert all(_is_sane_position(pos) for pos in positions.values())
 
-        expected_attempts = system.executor._max_grasp_retries + 1
+        presenter = HumanPresenter()
+        presenter.set_label_map({"red_block": failed_object_id})
+        report = presenter.present_completion(
+            goal=status.get("goal", "clean the table"),
+            nodes_done=status.get("nodes_complete", 0),
+            duration_s=1.0,
+            final_scene=SceneDescription(
+                objects=[],
+                arm_position="home",
+                bin_count=len(remaining_object_ids),
+                tray_count=0,
+                table_count=1,
+            ),
+            task_graph=status.get("task_graph", []),
+        )
+        assert report == (
+            f"Cleaned 3 of 4. I couldn't grip the red block after "
+            f"{MAX_RETRIES_PER_NODE} tries, so I left it on the table. "
+            "Want me to try the red block again, or leave it?"
+        )
+
+        expected_attempts = MAX_RETRIES_PER_NODE
         assert log.count("Forced magnet failure") == expected_attempts
         assert "unauthorized_execution_blocked" not in log
         assert "reauth" not in log.lower()

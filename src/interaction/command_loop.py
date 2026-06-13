@@ -776,6 +776,7 @@ class CommandLoop:
                     nodes_done=status.get("nodes_complete", 0),
                     duration_s=duration_s,
                     final_scene=scene,
+                    task_graph=status.get("task_graph", []),
                 )
                 print(f"\n  {msg}", flush=True)
                 self._monitor_execution_complete(self._session_bin_count)

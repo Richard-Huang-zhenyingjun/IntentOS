@@ -11,8 +11,11 @@ Rules:
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Optional
+
+from src.intentos.recovery import MAX_RETRIES_PER_NODE
 
 
 @dataclass
@@ -140,6 +143,7 @@ class HumanPresenter:
         nodes_done: int,
         duration_s: float,
         final_scene: SceneDescription,
+        task_graph: Optional[list[dict]] = None,
     ) -> str:
         """Task complete summary."""
         if self._debug_mode:
@@ -147,6 +151,10 @@ class HumanPresenter:
                 f"[DEBUG] Goal complete. {nodes_done} nodes. "
                 f"{duration_s:.1f}s. false_executions=0"
             )
+
+        graph_summary = self._completion_summary_from_graph(task_graph or [])
+        if graph_summary is not None:
+            return graph_summary
 
         table_str = (
             f"{final_scene.table_count} item(s) still on table"
@@ -169,6 +177,100 @@ class HumanPresenter:
 
         time_str = self._format_duration(duration_s)
         return f"Done in {time_str}. {summary.capitalize()}."
+
+    def _completion_summary_from_graph(self, task_graph: list[dict]) -> Optional[str]:
+        chains = self._object_chains(task_graph)
+        if not chains:
+            return None
+
+        placed = 0
+        skipped: list[tuple[str, str]] = []
+        for nodes in chains.values():
+            statuses = {str(node.get("status", "")) for node in nodes}
+            if "SKIPPED" in statuses:
+                skipped.append(self._describe_skipped_chain(nodes))
+            elif statuses and all(status == "DONE" for status in statuses):
+                placed += 1
+
+        total = len(chains)
+        if not skipped:
+            return None
+
+        if placed == 0:
+            prefix = f"I couldn't clean any of the {total} item(s)."
+        else:
+            prefix = f"Cleaned {placed} of {total}."
+
+        skip_sentences = [
+            (
+                f"I {reason} {label} after {MAX_RETRIES_PER_NODE} tries, "
+                "so I left it on the table."
+            )
+            for label, reason in skipped
+        ]
+
+        labels = [label for label, _reason in skipped]
+        if len(labels) == 1:
+            retry_text = f"Want me to try {labels[0]} again, or leave it?"
+        else:
+            retry_text = (
+                "Want me to try "
+                f"{self._join_readable(labels)} again, or leave them?"
+            )
+
+        return " ".join([prefix, *skip_sentences, retry_text])
+
+    @staticmethod
+    def _object_chains(task_graph: list[dict]) -> dict[int, list[dict]]:
+        chains: dict[int, list[dict]] = {}
+        for node in task_graph:
+            node_id = str(node.get("node_id", ""))
+            match = re.match(r"^(reach|grasp|move|release)_(\d+)$", node_id)
+            if not match:
+                continue
+            chains.setdefault(int(match.group(2)), []).append(node)
+        return dict(sorted(chains.items()))
+
+    def _describe_skipped_chain(self, nodes: list[dict]) -> tuple[str, str]:
+        label = self._label_skipped_chain(nodes)
+        reason = self._skip_reason_phrase(nodes)
+        return label, reason
+
+    def _label_skipped_chain(self, nodes: list[dict]) -> str:
+        for node in nodes:
+            params = node.get("parameters") or {}
+            object_id = params.get("object_id")
+            if object_id is not None:
+                return self._label_object(f"object_{object_id}")
+            target = params.get("target")
+            if target:
+                return self._label_object(str(target))
+        return "that item"
+
+    @staticmethod
+    def _skip_reason_phrase(nodes: list[dict]) -> str:
+        reason = " ".join(
+            str(node.get("error") or "")
+            for node in nodes
+            if node.get("status") == "SKIPPED" or node.get("error")
+        ).lower()
+        if "grasp_failed" in reason or "grasp_no_object" in reason:
+            return "couldn't grip"
+        if "unreachable" in reason or "ik_out_of_limits" in reason:
+            return "couldn't reach"
+        if "move_not_arrived" in reason or "move_invalid_pose" in reason:
+            return "couldn't place"
+        if "timeout" in reason:
+            return "took too long with"
+        return "couldn't move"
+
+    @staticmethod
+    def _join_readable(items: list[str]) -> str:
+        if len(items) <= 1:
+            return items[0] if items else ""
+        if len(items) == 2:
+            return f"{items[0]} and {items[1]}"
+        return f"{', '.join(items[:-1])}, and {items[-1]}"
 
     def present_pause(
         self,

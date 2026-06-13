@@ -16,7 +16,7 @@ from src.task_graph.types import TaskGraph, TaskNode
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES_PER_NODE = 2
+MAX_RETRIES_PER_NODE = 5
 MAX_RECOVERY_ATTEMPTS_PER_PLAN = 3
 
 
@@ -89,7 +89,7 @@ class RecoveryEngine:
             "invisible",
         }
         if any(keyword in reason for keyword in recoverable_keywords):
-            if retry_count < MAX_RETRIES_PER_NODE:
+            if retry_count < MAX_RETRIES_PER_NODE - 1:
                 self._retry_counts[node_id] = retry_count + 1
                 return RecoveryDecision(
                     failure_class=FailureClass.TRANSIENT,
@@ -105,7 +105,7 @@ class RecoveryEngine:
             return RecoveryDecision(
                 failure_class=FailureClass.SKIP,
                 node_id=node_id,
-                retry_count=retry_count,
+                retry_count=MAX_RETRIES_PER_NODE,
                 message=(
                     f"Recoverable failure on {node.action_type} exhausted "
                     "retries. Skipping this object and continuing."
@@ -126,7 +126,7 @@ class RecoveryEngine:
                 ),
             )
 
-        if retry_count < MAX_RETRIES_PER_NODE:
+        if retry_count < MAX_RETRIES_PER_NODE - 1:
             self._retry_counts[node_id] = retry_count + 1
             return RecoveryDecision(
                 failure_class=FailureClass.TRANSIENT,

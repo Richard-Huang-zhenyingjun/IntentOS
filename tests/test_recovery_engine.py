@@ -46,14 +46,16 @@ def test_retry_count_below_max_returns_transient_and_increments():
     node = make_node(action_type="grasp")
     graph = make_graph(node)
 
-    first = engine.classify(node, graph, "ik timeout")
-    second = engine.classify(node, graph, "ik timeout")
+    decisions = [
+        engine.classify(node, graph, "ik timeout")
+        for _ in range(MAX_RETRIES_PER_NODE - 1)
+    ]
 
-    assert first.failure_class == FailureClass.TRANSIENT
-    assert first.retry_count == 1
-    assert second.failure_class == FailureClass.TRANSIENT
-    assert second.retry_count == MAX_RETRIES_PER_NODE
-    assert engine._retry_counts[node.node_id] == MAX_RETRIES_PER_NODE
+    assert decisions[0].failure_class == FailureClass.TRANSIENT
+    assert decisions[0].retry_count == 1
+    assert decisions[-1].failure_class == FailureClass.TRANSIENT
+    assert decisions[-1].retry_count == MAX_RETRIES_PER_NODE - 1
+    assert engine._retry_counts[node.node_id] == MAX_RETRIES_PER_NODE - 1
 
 
 def test_object_failure_after_max_retries_returns_skip():
@@ -61,7 +63,7 @@ def test_object_failure_after_max_retries_returns_skip():
     node = make_node(action_type="grasp", target="red_block")
     graph = make_graph(node)
 
-    for _ in range(MAX_RETRIES_PER_NODE):
+    for _ in range(MAX_RETRIES_PER_NODE - 1):
         engine.classify(node, graph, "temporary slip")
     decision = engine.classify(node, graph, "object moved")
 
@@ -76,7 +78,7 @@ def test_default_after_max_retries_escalates():
     node = make_node()
     graph = make_graph(node)
 
-    for _ in range(MAX_RETRIES_PER_NODE):
+    for _ in range(MAX_RETRIES_PER_NODE - 1):
         engine.classify(node, graph, "temporary timeout")
     decision = engine.classify(node, graph, "still failing")
 

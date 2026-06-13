@@ -181,6 +181,7 @@ class IntentOSOrchestrator:
                             "action_type": n.action_type,
                             "parameters": n.parameters,
                             "status": n.status.name,
+                            "error": n.error,
                             "uncertainty": round(n.uncertainty.combined, 2),
                         }
                         for n in graph.nodes
@@ -679,7 +680,8 @@ class IntentOSOrchestrator:
         for node in graph.nodes:
             if node.node_id in affected and node.status != TaskStatus.DONE:
                 node.status = TaskStatus.SKIPPED
-                node.error = reason
+                if node.node_id != failed_node_id or not node.error:
+                    node.error = reason
 
     @staticmethod
     def _restore_downstream_pending(graph: TaskGraph, node_id: str) -> None:

@@ -5,6 +5,7 @@ import time
 from src.agents import ActionResult, AgentRegistry
 from src.intentos import IntentOSConfig, IntentOSOrchestrator
 from src.intentos.orchestrator import IntentOSState
+from src.intentos.recovery import MAX_RETRIES_PER_NODE
 from src.kernel import KernelCapabilities, KernelEvent, KernelState, ProposalReceipt
 from src.planning import PlanningResult
 from src.task_graph import (
@@ -277,12 +278,11 @@ def test_failed_node_invalidates_downstream_and_enters_error():
     tick_until_not_planning(orch)
 
     kernel.push_event("confirmed")
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
+    for _ in range(MAX_RETRIES_PER_NODE):
+        tick_until_not_planning(orch)
 
     assert agent.actions[0].node_id == "n1"
+    assert len(agent.actions) == MAX_RETRIES_PER_NODE
     assert graph.nodes[0].status == TaskStatus.FAILED
     assert graph.nodes[1].status == TaskStatus.INVALIDATED
     assert orch.state == IntentOSState.ERROR
@@ -393,15 +393,13 @@ def test_transient_failure_retries_before_escalation(tmp_path):
     tick_until_not_planning(orch)
     kernel.push_event("confirmed")
 
-    tick_until_not_planning(orch)
-    assert graph.nodes[0].status == TaskStatus.PENDING
-    assert len(agent.actions) == 1
+    for expected_attempt in range(1, MAX_RETRIES_PER_NODE):
+        tick_until_not_planning(orch)
+        assert graph.nodes[0].status == TaskStatus.PENDING
+        assert len(agent.actions) == expected_attempt
 
     tick_until_not_planning(orch)
-    assert graph.nodes[0].status == TaskStatus.PENDING
-    assert len(agent.actions) == 2
-
-    tick_until_not_planning(orch)
+    assert len(agent.actions) == MAX_RETRIES_PER_NODE
     assert graph.nodes[0].status == TaskStatus.FAILED
     assert orch.state == IntentOSState.ERROR
 
@@ -427,13 +425,12 @@ def test_recoverable_failure_exhaustion_skips_node_and_completes(tmp_path):
     tick_until_not_planning(orch)
     kernel.push_event("confirmed")
 
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
-    tick_until_not_planning(orch)
+    for _ in range(MAX_RETRIES_PER_NODE):
+        tick_until_not_planning(orch)
 
     assert graph.nodes[0].status == TaskStatus.SKIPPED
-    assert len(agent.actions) == 3
+    assert len(agent.actions) == MAX_RETRIES_PER_NODE
     assert planner.calls == [("clean the table", "scene")]
     assert len(kernel.submitted) == 1
+    tick_until_not_planning(orch)
     assert orch.state == IntentOSState.COMPLETE
