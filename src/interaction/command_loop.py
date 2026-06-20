@@ -461,8 +461,179 @@ class CommandLoop:
         self._monitor_execution_start()
         self._task_start_time = time.monotonic()
 
-        self._wait_for_execution_complete()
+        if self._is_clean_table_objective():
+            self._pursue_until_satisfied()
+        else:
+            self._wait_for_execution_complete()
         return ""
+
+    def _is_clean_table_objective(self) -> bool:
+        goal = str(self._orch.get_status().get("goal", "")).lower()
+        return any(word in goal for word in ("clean", "clear", "tidy"))
+
+    def _pursue_until_satisfied(self, max_cycles: Optional[int] = None) -> None:
+        """Loop a confirmed table-clear objective until satisfied or exhausted."""
+        abandoned: set[int] = set()
+        placed: set[int] = set()
+        objective_outcomes: dict[int, dict[str, Optional[str]]] = {}
+        stop_reason: Optional[str] = None
+        initial_scene = self._current_live_scene()
+        initial_remaining = self._on_table_object_ids(initial_scene)
+        cycle_cap = max_cycles if max_cycles is not None else (2 * len(initial_remaining) + 2)
+
+        for _cycle in range(cycle_cap):
+            live_scene = self._current_live_scene()
+            remaining = self._on_table_object_ids(live_scene) - abandoned
+            if not remaining:
+                self._orch.complete_objective_authorization("satisfied")
+                stop_reason = "satisfied"
+                break
+
+            result = self._orch.continue_confirmed_objective(live_scene, abandoned)
+
+            if not result.accepted:
+                stop_reason = f"refused: {result.reason}"
+                self._orch.revoke_objective_authorization("refused")
+                break
+
+            cycle_done = 0
+            cycle_skipped = 0
+            for obj_id, outcome in result.outcomes.items():
+                outcome_status = outcome.get("status")
+                if outcome_status in {"DONE", "SKIPPED", "FAILED"}:
+                    objective_outcomes[obj_id] = {
+                        "status": outcome_status,
+                        "reason": outcome.get("reason"),
+                    }
+                if outcome_status == "SKIPPED":
+                    cycle_skipped += 1
+                    abandoned.add(obj_id)
+                elif outcome_status == "DONE" and obj_id not in placed:
+                    cycle_done += 1
+                    placed.add(obj_id)
+                    self._moved_object_ids.add(obj_id)
+                    self._mark_planner_object_moved(obj_id)
+                    self._sync_monitor_object_done(obj_id)
+                    self._bin_count += 1
+                    self._session_bin_count += 1
+
+            if cycle_done == 0 and cycle_skipped == 0:
+                stop_reason = "no_progress"
+                self._orch.revoke_objective_authorization("no_progress")
+                break
+
+            if result.reason == "objective_satisfied":
+                stop_reason = "satisfied"
+                break
+        else:
+            stop_reason = "max_cycles"
+            self._orch.revoke_objective_authorization("max_cycles")
+
+        duration_s = time.monotonic() - self._task_start_time
+        live_scene = self._current_live_scene()
+        table_remaining = len(self._on_table_object_ids(live_scene) - abandoned)
+        scene = SceneDescription(
+            objects=self._preset_objects,
+            arm_position="home",
+            bin_count=self._bin_count,
+            tray_count=self._tray_count,
+            table_count=table_remaining,
+        )
+        msg = self._presenter.present_completion(
+            goal=self._orch.get_status().get("goal", "clean the table"),
+            nodes_done=self._orch.get_status().get("nodes_complete", 0),
+            duration_s=duration_s,
+            final_scene=scene,
+            task_graph=self._objective_report_graph(objective_outcomes),
+        )
+        if stop_reason == "satisfied" and not abandoned and table_remaining == 0:
+            msg = "Table's clear."
+        if stop_reason and stop_reason.startswith("refused"):
+            msg = f"{msg} I stopped because {stop_reason}."
+        elif stop_reason == "max_cycles":
+            msg = (
+                f"{msg} Table still isn't clear after {cycle_cap} rounds. "
+                "Want me to keep going, or leave it for now?"
+            )
+        elif stop_reason == "no_progress":
+            msg = f"{msg} I stopped because the objective made no progress."
+
+        print(f"\n  {msg}", flush=True)
+        self._monitor_execution_complete(self._session_bin_count)
+        self._monitor_system_response(msg)
+        self._last_reported_complete = True
+
+    def _current_live_scene(self):
+        """Return a live SceneSummary from the Phase 2 scene summarizer."""
+        summarizer = getattr(self._world, "scene_summarizer", None)
+        artifacts = getattr(self._world, "world_artifacts", None)
+        read_world = getattr(self._world, "_read_world_state", None)
+        if callable(read_world) and summarizer is not None:
+            return summarizer.summarize(
+                read_world(),
+                artifacts,
+                timestamp_frame=getattr(self._world, "global_frame_counter", 0),
+            )
+        current_scene = getattr(self._world, "current_scene", None)
+        if current_scene is not None:
+            return current_scene
+        raise RuntimeError("No live scene source available for objective loop")
+
+    @staticmethod
+    def _on_table_object_ids(live_scene) -> set[int]:
+        ids = set()
+        for obj in getattr(live_scene, "objects_on_table", ()) or ():
+            object_id = getattr(obj, "object_id", None)
+            if object_id is not None:
+                ids.add(object_id)
+        return ids
+
+    def _sync_monitor_object_done(self, object_id: int, destination: str = "bin") -> None:
+        """
+        Mirror objective-loop per-object outcomes into the monitor.
+
+        The legacy execution path updated StateBridge per completed node. The
+        persistence loop receives compact per-object outcomes from IntentOS, so
+        it emits the same reach->move pair for DONE objects. SKIPPED objects do
+        not call this and therefore remain on the table in the canvas.
+        """
+        if self._bridge_monitor is None:
+            return
+        self._bridge_monitor.on_node_complete(
+            node_id=f"objective_reach_{object_id}",
+            action_type="reach",
+            success=True,
+            parameters={"object_id": object_id},
+        )
+        self._bridge_monitor.on_node_complete(
+            node_id=f"objective_move_{object_id}",
+            action_type="move",
+            success=True,
+            parameters={
+                "object_id": object_id,
+                "target": destination,
+            },
+        )
+
+    @staticmethod
+    def _objective_report_graph(
+        outcomes: dict[int, dict[str, Optional[str]]]
+    ) -> list[dict]:
+        graph = []
+        for idx, (object_id, outcome) in enumerate(sorted(outcomes.items())):
+            graph.append(
+                {
+                    "node_id": f"reach_{idx}",
+                    "action_type": "reach",
+                    "status": outcome.get("status"),
+                    "error": outcome.get("reason"),
+                    "parameters": {
+                        "object_id": object_id,
+                        "target": f"object_{object_id}",
+                    },
+                }
+            )
+        return graph
 
     def _handle_cancel(self) -> str:
         """Handle no/cancel/stop."""

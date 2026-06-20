@@ -358,9 +358,12 @@ class HeuristicPlanner:
         return None, destination
 
     def _clean_table_nodes(self) -> list[TaskNode]:
-        cycles = []
         available = self._get_available_objects()
+        return self.clean_table_nodes_for_objects(available)
 
+    def clean_table_nodes_for_objects(self, available: list[dict]) -> list[TaskNode]:
+        """Build clean-table nodes for already-resolved live object parameters."""
+        cycles = []
         if not available:
             available = [None]
 

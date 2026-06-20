@@ -6,7 +6,12 @@ from src.agents import ActionResult, AgentRegistry
 from src.intentos import IntentOSConfig, IntentOSOrchestrator
 from src.intentos.orchestrator import IntentOSState
 from src.intentos.recovery import MAX_RETRIES_PER_NODE
-from src.kernel import KernelCapabilities, KernelEvent, KernelState, ProposalReceipt
+from src.kernel import (
+    KernelCapabilities,
+    KernelEvent,
+    KernelState,
+    ProposalReceipt,
+)
 from src.planning import PlanningResult
 from src.task_graph import (
     ConfirmationPolicy,
@@ -113,6 +118,27 @@ class ObjectMovedAgent(FakeAgent):
             success=False,
             failure_reason="object moved",
             world_state_delta={},
+            duration_ms=5.0,
+        )
+
+
+class MoveIkFailureAgent(FakeAgent):
+    def execute(self, action, token):
+        self.actions.append(action)
+        self.tokens.append(token)
+        if action.node_id == "move_0":
+            return ActionResult(
+                node_id=action.node_id,
+                success=False,
+                failure_reason="ik_out_of_limits",
+                world_state_delta={},
+                duration_ms=5.0,
+            )
+        return ActionResult(
+            node_id=action.node_id,
+            success=True,
+            failure_reason=None,
+            world_state_delta={"action": action.action_type},
             duration_ms=5.0,
         )
 
@@ -286,6 +312,96 @@ def test_failed_node_invalidates_downstream_and_enters_error():
     assert graph.nodes[0].status == TaskStatus.FAILED
     assert graph.nodes[1].status == TaskStatus.INVALIDATED
     assert orch.state == IntentOSState.ERROR
+
+
+def test_recoverable_move_failure_restores_downstream_then_skips_chain():
+    graph = make_graph(
+        [
+            TaskNode(
+                node_id="reach_0",
+                action_type="reach",
+                agent_id="arm",
+                parameters={"object_id": 4},
+            ),
+            TaskNode(
+                node_id="grasp_0",
+                action_type="grasp",
+                agent_id="arm",
+                parameters={"object_id": 4},
+                depends_on=["reach_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+            TaskNode(
+                node_id="move_0",
+                action_type="move",
+                agent_id="arm",
+                parameters={"object_id": 4},
+                depends_on=["grasp_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+            TaskNode(
+                node_id="release_0",
+                action_type="release",
+                agent_id="arm",
+                parameters={"object_id": 4},
+                depends_on=["move_0"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+            TaskNode(
+                node_id="reach_1",
+                action_type="reach",
+                agent_id="arm",
+                parameters={"object_id": 5},
+            ),
+            TaskNode(
+                node_id="grasp_1",
+                action_type="grasp",
+                agent_id="arm",
+                parameters={"object_id": 5},
+                depends_on=["reach_1"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+            TaskNode(
+                node_id="move_1",
+                action_type="move",
+                agent_id="arm",
+                parameters={"object_id": 5},
+                depends_on=["grasp_1"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+            TaskNode(
+                node_id="release_1",
+                action_type="release",
+                agent_id="arm",
+                parameters={"object_id": 5},
+                depends_on=["move_1"],
+                confirmation_policy=ConfirmationPolicy.NEVER,
+            ),
+        ]
+    )
+    orch, kernel, _, agent = make_orchestrator(
+        graph=graph,
+        agent=MoveIkFailureAgent(),
+    )
+    orch.submit_goal("clean the table", "scene")
+    tick_until_not_planning(orch)
+    kernel.push_event("confirmed")
+
+    for _ in range(50):
+        orch.tick()
+        if orch.state in {IntentOSState.COMPLETE, IntentOSState.ERROR, IntentOSState.ABORTED}:
+            break
+
+    assert orch.state == IntentOSState.COMPLETE
+    assert sum(1 for action in agent.actions if action.node_id == "move_0") == MAX_RETRIES_PER_NODE
+    assert graph.get_node("move_0").status == TaskStatus.SKIPPED
+    assert graph.get_node("release_0").status == TaskStatus.SKIPPED
+    assert graph.get_node("release_0").status != TaskStatus.INVALIDATED
+    assert all(
+        graph.get_node(node_id).status == TaskStatus.DONE
+        for node_id in ("reach_1", "grasp_1", "move_1", "release_1")
+    )
+    assert kernel.false_executions == 0
 
 
 def test_missing_agent_marks_node_failed():

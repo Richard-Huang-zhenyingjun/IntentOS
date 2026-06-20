@@ -136,6 +136,35 @@ def _compensated_link6_target(desired_link7_position, orientation) -> list[float
     ]
 
 
+def _fit_rest_pose(seed: list[float], joint_count: int) -> list[float]:
+    if len(seed) >= joint_count:
+        return [float(v) for v in seed[:joint_count]]
+    return [float(v) for v in seed] + [0.0] * (joint_count - len(seed))
+
+
+def _ik_rest_pose_candidates(rest: list[float], joint_count: int) -> list[list[float]]:
+    """Return deterministic IK seeds, starting with the live arm pose."""
+    seeds = [
+        rest,
+        [0.0] * joint_count,
+        # Known-good top-down-ish branches for placing at the workspace bin.
+        [-0.52, 0.05, -2.49, 1.15, -0.25, -1.89, 0.46],
+        [1.48, 0.17, 1.48, 1.19, 0.04, -1.80, -0.14],
+        [0.47, 0.11, 2.47, 1.03, 0.26, -1.90, -1.65],
+        [-2.68, -0.03, -0.53, 1.17, 0.13, -1.85, -0.83],
+    ]
+    candidates: list[list[float]] = []
+    seen: set[tuple[float, ...]] = set()
+    for seed in seeds:
+        fitted = _fit_rest_pose([float(v) for v in seed], joint_count)
+        key = tuple(round(v, 3) for v in fitted)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(fitted)
+    return candidates
+
+
 def calculate_limited_tool_down_ik(
     robot_id: int,
     ee_link_index: int,
@@ -155,84 +184,93 @@ def calculate_limited_tool_down_ik(
         p.getJointState(robot_id, joint_idx)[0]
         for joint_idx in range(p.getNumJoints(robot_id))
     ]
-    for roll_off, pitch_off, yaw, orientation in _tool_down_orientation_candidates():
-        link6_target = _compensated_link6_target(desired_link7_position, orientation)
-        try:
-            ik = p.calculateInverseKinematics(
-                bodyUniqueId=robot_id,
-                endEffectorLinkIndex=ee_link_index,
-                targetPosition=link6_target,
-                targetOrientation=orientation,
-                lowerLimits=lower,
-                upperLimits=upper,
-                jointRanges=ranges,
-                restPoses=rest,
-                maxNumIterations=100,
-                residualThreshold=0.001,
-            )
-        except TypeError:
-            ik = p.calculateInverseKinematics(
-                bodyUniqueId=robot_id,
-                endEffectorLinkIndex=ee_link_index,
-                targetPosition=link6_target,
-                targetOrientation=orientation,
-            )
+    rest_candidates = _ik_rest_pose_candidates(rest, joint_count)
+    for seed_index, seed_rest in enumerate(rest_candidates):
+        for roll_off, pitch_off, yaw, orientation in _tool_down_orientation_candidates():
+            link6_target = _compensated_link6_target(desired_link7_position, orientation)
+            try:
+                ik = p.calculateInverseKinematics(
+                    bodyUniqueId=robot_id,
+                    endEffectorLinkIndex=ee_link_index,
+                    targetPosition=link6_target,
+                    targetOrientation=orientation,
+                    lowerLimits=lower,
+                    upperLimits=upper,
+                    jointRanges=ranges,
+                    restPoses=seed_rest,
+                    maxNumIterations=100,
+                    residualThreshold=0.001,
+                )
+            except TypeError:
+                ik = p.calculateInverseKinematics(
+                    bodyUniqueId=robot_id,
+                    endEffectorLinkIndex=ee_link_index,
+                    targetPosition=link6_target,
+                    targetOrientation=orientation,
+                )
 
-        normalized = normalize_ik_solution(
-            ik,
-            lower,
-            upper,
-            joint_count,
-            rest_pose=rest,
-        )
-        try:
-            validate_ik_solution(normalized, lower, upper, joint_count)
-        except IKOutOfLimitsError as exc:
-            errors.append(str(exc))
-            continue
-
-        for joint_idx, joint_value in enumerate(normalized):
-            p.resetJointState(robot_id, joint_idx, joint_value)
-        link7_pos = p.getLinkState(
-            robot_id,
-            7,
-            computeForwardKinematics=True,
-        )[4]
-        cartesian_error = sum(
-            (float(link7_pos[i]) - float(desired_link7_position[i])) ** 2
-            for i in range(3)
-        ) ** 0.5
-        for joint_idx, joint_value in enumerate(saved_joint_states):
-            p.resetJointState(robot_id, joint_idx, joint_value)
-        if cartesian_error > 0.04:
-            errors.append(f"cartesian error {cartesian_error:.3f}m")
-            continue
-
-        joint_distance = sum(
-            (float(q) - float(r)) ** 2
-            for q, r in zip(normalized, rest[:joint_count])
-        ) ** 0.5
-        margins = [
-            min(float(q) - lo, hi - float(q))
-            for q, lo, hi in zip(normalized, lower, upper)
-        ]
-        min_margin = min(margins, default=0.0)
-        margin_penalty = sum(
-            max(0.0, 0.25 - margin) ** 2
-            for margin in margins
-        )
-        tilt_penalty = abs(roll_off) + abs(pitch_off) + 0.1 * abs(yaw)
-        cost = joint_distance + 8.0 * margin_penalty + 0.2 * tilt_penalty + 5.0 * cartesian_error
-        valid_candidates.append(
-            (
-                cost,
-                -min_margin,
-                normalized,
-                orientation,
-                (roll_off, pitch_off, yaw),
-                link6_target,
+            normalized = normalize_ik_solution(
+                ik,
+                lower,
+                upper,
+                joint_count,
+                rest_pose=seed_rest,
             )
-        )
+            try:
+                validate_ik_solution(normalized, lower, upper, joint_count)
+            except IKOutOfLimitsError as exc:
+                errors.append(str(exc))
+                continue
+
+            for joint_idx, joint_value in enumerate(normalized):
+                p.resetJointState(robot_id, joint_idx, joint_value)
+            link7_pos = p.getLinkState(
+                robot_id,
+                7,
+                computeForwardKinematics=True,
+            )[4]
+            cartesian_error = sum(
+                (float(link7_pos[i]) - float(desired_link7_position[i])) ** 2
+                for i in range(3)
+            ) ** 0.5
+            for joint_idx, joint_value in enumerate(saved_joint_states):
+                p.resetJointState(robot_id, joint_idx, joint_value)
+            if cartesian_error > 0.04:
+                errors.append(f"cartesian error {cartesian_error:.3f}m")
+                continue
+
+            joint_distance = sum(
+                (float(q) - float(r)) ** 2
+                for q, r in zip(normalized, seed_rest[:joint_count])
+            ) ** 0.5
+            margins = [
+                min(float(q) - lo, hi - float(q))
+                for q, lo, hi in zip(normalized, lower, upper)
+            ]
+            min_margin = min(margins, default=0.0)
+            margin_penalty = sum(
+                max(0.0, 0.25 - margin) ** 2
+                for margin in margins
+            )
+            tilt_penalty = abs(roll_off) + abs(pitch_off) + 0.1 * abs(yaw)
+            seed_penalty = 0.0 if seed_index == 0 else 0.15 * seed_index
+            cost = (
+                joint_distance
+                + 8.0 * margin_penalty
+                + 0.2 * tilt_penalty
+                + 5.0 * cartesian_error
+                + seed_penalty
+            )
+            valid_candidates.append(
+                (
+                    cost,
+                    -min_margin,
+                    normalized,
+                    orientation,
+                    (roll_off, pitch_off, yaw),
+                    link6_target,
+                )
+            )
 
     if valid_candidates:
         _, _, normalized, orientation, offsets, link6_target = min(

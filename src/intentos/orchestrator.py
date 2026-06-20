@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Any, Optional
 
 from src.agents import ActionResult, AgentAction, AgentRegistry
 from src.coordination import AgentCoordinator, CoordinatorConfig
@@ -46,6 +46,33 @@ class IntentOSState(Enum):
     COMPLETE = auto()
     ABORTED = auto()
     ERROR = auto()
+
+
+class ObjectiveAuthorizationStatus(Enum):
+    ACTIVE = auto()
+    COMPLETED = auto()
+    REVOKED = auto()
+
+
+@dataclass
+class ObjectiveAuthorization:
+    """Record of the objective scope created by a real human confirmation."""
+
+    objective_type: str
+    source_goal: str
+    phase2_token_id: Optional[str]
+    proposal_id: Optional[str] = None
+    status: ObjectiveAuthorizationStatus = ObjectiveAuthorizationStatus.ACTIVE
+    reason: Optional[str] = None
+
+
+@dataclass
+class ObjectiveContinuationResult:
+    """Result of one authorized objective-continuation cycle."""
+
+    accepted: bool
+    reason: str
+    outcomes: dict[int, dict[str, Optional[str]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -101,6 +128,7 @@ class IntentOSOrchestrator:
         self._segments: list[CheckpointSegment] = []
         self._current_segment_idx: int = 0
         self._current_token: Optional[ScopedExecutionToken] = None
+        self._objective_authorization: Optional[ObjectiveAuthorization] = None
         self._planning_executor = cf.ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="intentos_planner",
@@ -132,9 +160,111 @@ class IntentOSOrchestrator:
     def cancel(self) -> None:
         """Cancel current IntentOS goal. Safe in any state."""
         logger.info("IntentOS cancel requested in state %s", self._state.name)
+        self.revoke_objective_authorization("user_cancelled")
         self._state = IntentOSState.ABORTED
         self._context = None
         self._pending_goal = None
+
+    def complete_objective_authorization(self, reason: str = "objective_satisfied") -> None:
+        """Mark the active objective authorization complete."""
+        auth = self._objective_authorization
+        if auth is None or auth.status != ObjectiveAuthorizationStatus.ACTIVE:
+            return
+        auth.status = ObjectiveAuthorizationStatus.COMPLETED
+        auth.reason = reason
+        self._complete_phase2_authorization()
+
+    def revoke_objective_authorization(self, reason: str) -> None:
+        """Revoke the active objective authorization with an explicit reason."""
+        auth = self._objective_authorization
+        if auth is None or auth.status != ObjectiveAuthorizationStatus.ACTIVE:
+            return
+        auth.status = ObjectiveAuthorizationStatus.REVOKED
+        auth.reason = reason
+        self._invalidate_phase2_authorization(reason)
+
+    def continue_confirmed_objective(
+        self,
+        live_scene: Any,
+        abandoned_object_ids: set[int],
+        timeout_s: float = 60.0,
+    ) -> ObjectiveContinuationResult:
+        """
+        Continue a confirmed objective using a fresh graph and scoped token.
+
+        The objective authorization is only a parent scope: this method still
+        issues a normal ScopedExecutionToken for the concrete replanned segment,
+        and the existing node/token gate remains unchanged.
+        """
+        refusal = self._validate_active_objective_authorization()
+        if refusal is not None:
+            return ObjectiveContinuationResult(False, refusal)
+
+        remaining = self._remaining_live_table_objects(
+            live_scene,
+            abandoned_object_ids,
+        )
+        if not remaining:
+            self.complete_objective_authorization("objective_satisfied")
+            return ObjectiveContinuationResult(True, "objective_satisfied", {})
+
+        try:
+            graph = self._build_objective_continuation_graph(remaining)
+        except RuntimeError as exc:
+            return ObjectiveContinuationResult(False, str(exc))
+        refusal = self._validate_objective_continuation_graph(
+            graph,
+            live_scene,
+            abandoned_object_ids,
+        )
+        if refusal is not None:
+            return ObjectiveContinuationResult(False, refusal)
+
+        plan_result = PlanningResult(
+            graph=graph,
+            used_llm=False,
+            used_fallback=True,
+            repair_attempts=0,
+            violations_found=[],
+            planning_duration_ms=0.0,
+            plan_source="objective_continuation",
+        )
+        proposal = self._proposal_engine.propose(
+            graph,
+            plan_result.plan_source,
+            str(uuid.uuid4())[:8],
+        )
+        self._context = ExecutionContext(
+            plan_result=plan_result,
+            proposal=proposal,
+            graph=graph,
+            started_at=time.monotonic(),
+        )
+        self._segments = self._checkpoint_planner.segment(graph)
+        self._current_segment_idx = 0
+        self._current_token = None
+        self._recovery.reset_plan()
+        self._issue_current_segment_token()
+        if self._current_token is None:
+            return ObjectiveContinuationResult(False, "could not issue scoped token")
+
+        self._state = IntentOSState.EXECUTING
+        deadline = time.monotonic() + timeout_s
+        while self._state == IntentOSState.EXECUTING and time.monotonic() < deadline:
+            self.tick()
+
+        if self._state == IntentOSState.EXECUTING:
+            return ObjectiveContinuationResult(
+                False,
+                "objective continuation timed out",
+                self._object_outcomes(graph),
+            )
+
+        return ObjectiveContinuationResult(
+            self._state == IntentOSState.COMPLETE,
+            self._state.name.lower(),
+            self._object_outcomes(graph),
+        )
 
     def tick(self) -> None:
         """
@@ -207,17 +337,22 @@ class IntentOSOrchestrator:
         for event in events:
             if event.kind == "confirmed" and self._state == IntentOSState.AWAITING_CONFIRM:
                 logger.info("Human confirmed proposal - beginning execution")
+                self._create_objective_authorization(event)
                 self._issue_current_segment_token()
                 self._state = IntentOSState.EXECUTING
             elif event.kind == "cancelled":
                 logger.info("Human cancelled - aborting")
+                self.revoke_objective_authorization("user_cancelled")
                 self._state = IntentOSState.ABORTED
                 self._context = None
-                self._invalidate_phase2_authorization("intentos_cancelled")
+                if self._objective_authorization is None:
+                    self._invalidate_phase2_authorization("intentos_cancelled")
             elif event.kind == "failed":
                 logger.error("Kernel reported failure: %s", event.details)
+                self.revoke_objective_authorization("kernel_failed")
                 self._state = IntentOSState.ERROR
-                self._invalidate_phase2_authorization("intentos_kernel_failed")
+                if self._objective_authorization is None:
+                    self._invalidate_phase2_authorization("intentos_kernel_failed")
 
     def _do_planning(self) -> None:
         """
@@ -234,6 +369,7 @@ class IntentOSOrchestrator:
             except Exception as exc:
                 logger.error("Planning failed with exception: %s", exc)
                 self._pending_plan_future = None
+                self.revoke_objective_authorization("planning_failed")
                 self._state = IntentOSState.ERROR
             return
 
@@ -277,6 +413,7 @@ class IntentOSOrchestrator:
 
         if proposal.uncertainty_level == "abort":
             logger.warning("Plan aborted: %s", proposal.warning)
+            self.revoke_objective_authorization("proposal_aborted")
             self._state = IntentOSState.ABORTED
             return
 
@@ -322,7 +459,8 @@ class IntentOSOrchestrator:
 
         graph = self._context.graph
         if graph.is_complete():
-            if graph.has_failures():
+            self._normalize_terminal_recoverable_failures(graph)
+            if self._graph_has_unresolved_failures(graph):
                 logger.warning("Graph complete with failures")
                 self._state = IntentOSState.ERROR
             else:
@@ -361,6 +499,7 @@ class IntentOSOrchestrator:
                 if node is not None:
                     node.status = TaskStatus.FAILED
                     node.error = "No valid scoped token"
+            self.revoke_objective_authorization("unauthorized_scoped_token")
             self._state = IntentOSState.ERROR
             return
 
@@ -418,7 +557,11 @@ class IntentOSOrchestrator:
                 time.monotonic() - self._context.started_at,
             )
             self._state = IntentOSState.COMPLETE
-            self._complete_phase2_authorization()
+            if not self._has_active_table_clear_authorization():
+                if self._objective_authorization is not None:
+                    self.complete_objective_authorization("objective_satisfied")
+                else:
+                    self._complete_phase2_authorization()
 
     def _execute_node(self, node: TaskNode) -> None:
         agent = self._registry.get(node.agent_id)
@@ -504,8 +647,10 @@ class IntentOSOrchestrator:
         if decision.failure_class == FailureClass.REPLANNING:
             self._state = IntentOSState.ABORTED
             self._current_token = None
+            self.revoke_objective_authorization("replanning_required")
             logger.info("Local replan requested: %s", decision.replan_goal)
         else:
+            self.revoke_objective_authorization("recovery_error")
             self._state = IntentOSState.ERROR
 
         self._invalidate_downstream(graph, node.node_id)
@@ -520,8 +665,11 @@ class IntentOSOrchestrator:
         if decision.failure_class == FailureClass.TRANSIENT:
             self._reset_agent_error(node.agent_id)
             node.status = TaskStatus.PENDING
+            node.error = None
+            self._restore_downstream_pending(graph, node.node_id)
             logger.info("Recovery: retry node %s", node.node_id)
         elif decision.failure_class == FailureClass.SKIP:
+            self._restore_downstream_pending(graph, node.node_id)
             self._skip_downstream_chain(graph, node.node_id, decision.message)
             self._reset_agent_error(node.agent_id)
             self._record_phase2_object_skipped(node.node_id)
@@ -534,13 +682,17 @@ class IntentOSOrchestrator:
             self._invalidate_downstream(graph, node.node_id)
             self._pending_goal = (decision.replan_goal, "")
             self._state = IntentOSState.PLANNING
-            self._invalidate_phase2_authorization("intentos_replanning")
+            self.revoke_objective_authorization("replanning_required")
+            if self._objective_authorization is None:
+                self._invalidate_phase2_authorization("intentos_replanning")
             logger.info("Recovery: replan from %s", decision.replan_goal)
         else:
             self._invalidate_downstream(graph, node.node_id)
             self._coordinator.emergency_stop_all()
             self._state = IntentOSState.ERROR
-            self._invalidate_phase2_authorization("intentos_escalation")
+            self.revoke_objective_authorization("safety_escalation")
+            if self._objective_authorization is None:
+                self._invalidate_phase2_authorization("intentos_escalation")
             logger.error(
                 "Recovery: escalation - %s. All agents stopped.",
                 decision.escalation_reason,
@@ -574,10 +726,278 @@ class IntentOSOrchestrator:
         if callable(reset_error):
             reset_error()
 
+    def _validate_active_objective_authorization(self) -> Optional[str]:
+        auth = self._objective_authorization
+        if auth is None:
+            return "no active objective authorization"
+        if auth.status != ObjectiveAuthorizationStatus.ACTIVE:
+            return "objective authorization is not active"
+        if auth.objective_type != "table_clear":
+            return "objective authorization is not for table_clear"
+        if not auth.source_goal:
+            return "objective authorization has no source goal"
+        if not auth.proposal_id:
+            return "objective authorization is not tied to a proposal"
+        if not auth.phase2_token_id:
+            return "objective authorization has no Phase 2 token"
+
+        get_snapshot = getattr(self._kernel, "get_snapshot", None)
+        if not callable(get_snapshot):
+            return "could not verify Phase 2 token"
+        snapshot = get_snapshot()
+        if getattr(snapshot, "active_token_id", None) != auth.phase2_token_id:
+            return "Phase 2 token is not active for objective"
+        return None
+
+    def _has_active_table_clear_authorization(self) -> bool:
+        auth = self._objective_authorization
+        return (
+            auth is not None
+            and auth.status == ObjectiveAuthorizationStatus.ACTIVE
+            and auth.objective_type == "table_clear"
+        )
+
+    @staticmethod
+    def _remaining_live_table_objects(
+        live_scene: Any,
+        abandoned_object_ids: set[int],
+    ) -> list[dict]:
+        remaining = []
+        for obj in getattr(live_scene, "objects_on_table", ()) or ():
+            object_id = getattr(obj, "object_id", None)
+            pos = getattr(obj, "pos_xyz", None)
+            if object_id is None or pos is None:
+                continue
+            if object_id in abandoned_object_ids:
+                continue
+            remaining.append(
+                {
+                    "target": f"object_{object_id}",
+                    "target_xyz": list(pos),
+                    "object_id": object_id,
+                }
+            )
+        return remaining
+
+    def _build_objective_continuation_graph(
+        self,
+        remaining_objects: list[dict],
+    ) -> TaskGraph:
+        heuristic = getattr(self._planner, "_heuristic", None)
+        build_nodes = getattr(heuristic, "clean_table_nodes_for_objects", None)
+        if not callable(build_nodes):
+            raise RuntimeError("planner does not support clean-table continuation")
+        auth = self._objective_authorization
+        goal = auth.source_goal if auth is not None else "clean the table"
+        return TaskGraph(
+            graph_id=str(uuid.uuid4())[:8],
+            goal=goal,
+            nodes=build_nodes(remaining_objects),
+            created_at=time.time(),
+            plan_confidence=0.6,
+            interpretation_note="Objective continuation",
+        )
+
+    def _validate_objective_continuation_graph(
+        self,
+        graph: TaskGraph,
+        live_scene: Any,
+        abandoned_object_ids: set[int],
+    ) -> Optional[str]:
+        auth = self._objective_authorization
+        if auth is None or auth.objective_type != "table_clear":
+            return "objective scope is not table_clear"
+        if graph.goal != auth.source_goal:
+            return "continuation graph goal differs from confirmed objective"
+
+        allowed_actions = {"reach", "grasp", "move", "release"}
+        live_table_ids = {
+            getattr(obj, "object_id", None)
+            for obj in getattr(live_scene, "objects_on_table", ()) or ()
+        }
+        live_table_ids.discard(None)
+
+        for node in graph.nodes:
+            if node.action_type not in allowed_actions:
+                return f"action {node.action_type!r} is outside objective scope"
+
+            params = node.parameters or {}
+            object_id = params.get("object_id")
+            if object_id is not None:
+                if object_id not in live_table_ids:
+                    return f"object {object_id!r} is not a live table object"
+                if object_id in abandoned_object_ids:
+                    return f"object {object_id!r} was abandoned"
+
+            if node.action_type in {"reach", "grasp"} and object_id is None:
+                return f"{node.action_type} node {node.node_id!r} has no object_id"
+
+            if node.action_type == "move":
+                destination = params.get("target")
+                if destination not in {"bin", "tray"}:
+                    return f"move destination {destination!r} is outside objective scope"
+
+            for key in ("target_xyz", "destination_xyz"):
+                pos = params.get(key)
+                if pos is not None and not self._position_in_workspace(pos):
+                    return f"{node.node_id}.{key} is outside workspace"
+
+        return None
+
+    @staticmethod
+    def _position_in_workspace(pos: Any) -> bool:
+        try:
+            if len(pos) < 3:
+                return False
+            x, y, z = (float(pos[0]), float(pos[1]), float(pos[2]))
+            return abs(x) <= 1.0 and abs(y) <= 1.0 and 0.0 <= z <= 1.5
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _object_outcomes(graph: TaskGraph) -> dict[int, dict[str, Optional[str]]]:
+        chains: dict[str, list[TaskNode]] = {}
+        for node in graph.nodes:
+            try:
+                chain_id = node.node_id.rsplit("_", 1)[1]
+            except IndexError:
+                continue
+            chains.setdefault(chain_id, []).append(node)
+
+        outcomes: dict[int, dict[str, Optional[str]]] = {}
+        for nodes in chains.values():
+            object_id = None
+            for node in nodes:
+                object_id = (node.parameters or {}).get("object_id")
+                if object_id is not None:
+                    break
+            if object_id is None:
+                continue
+
+            reason = next((node.error for node in nodes if node.error), None)
+            statuses = [node.status for node in nodes]
+            if any(status == TaskStatus.SKIPPED for status in statuses):
+                outcome = "SKIPPED"
+            elif any(status in (TaskStatus.FAILED, TaskStatus.INVALIDATED) for status in statuses):
+                outcome = "FAILED"
+            elif all(status == TaskStatus.DONE for status in statuses):
+                outcome = "DONE"
+            else:
+                outcome = "PENDING"
+            outcomes[int(object_id)] = {
+                "status": outcome,
+                "reason": reason,
+            }
+        return outcomes
+
     def _current_segment(self) -> Optional[CheckpointSegment]:
         if 0 <= self._current_segment_idx < len(self._segments):
             return self._segments[self._current_segment_idx]
         return None
+
+    @staticmethod
+    def _normalize_terminal_recoverable_failures(graph: TaskGraph) -> None:
+        """
+        Treat terminal recoverable object failures as skipped outcomes.
+
+        Recovery usually marks the failed object's chain as SKIPPED immediately.
+        In physics-timing edge cases a recoverable FAILED/INVALIDATED terminal
+        node can survive until graph completion. That is still an honest
+        skip-and-continue outcome, not an unresolved safety failure.
+        """
+        recoverable_error_codes = {
+            "grasp_failed",
+            "grasp_no_object_id",
+            "grasp_no_object_position",
+            "unreachable",
+            "timeout",
+            "move_invalid_pose",
+            "move_not_arrived",
+            "ik_out_of_limits",
+        }
+        recoverable_chain_ids = set()
+        for node in graph.nodes:
+            if node.status not in (TaskStatus.FAILED, TaskStatus.INVALIDATED):
+                continue
+            error_code = str(node.error or "").strip().lower()
+            if error_code not in recoverable_error_codes:
+                continue
+            chain_id = IntentOSOrchestrator._object_chain_id(node.node_id)
+            if chain_id is None:
+                continue
+            recoverable_chain_ids.add(chain_id)
+
+        for node in graph.nodes:
+            chain_id = IntentOSOrchestrator._object_chain_id(node.node_id)
+            if chain_id is None:
+                continue
+            if (
+                chain_id in recoverable_chain_ids
+                and node.status in (TaskStatus.FAILED, TaskStatus.INVALIDATED)
+            ):
+                node.status = TaskStatus.SKIPPED
+                if not node.error:
+                    node.error = "recoverable failure skipped"
+
+    @staticmethod
+    def _object_chain_id(node_id: str) -> Optional[str]:
+        """
+        Return the numeric suffix for clean-table object-chain nodes only.
+
+        Infrastructure failures such as missing agents must remain FAILED and
+        surface as ERROR. Only reach_i/grasp_i/move_i/release_i chains can be
+        normalized into object-level SKIPPED outcomes.
+        """
+        try:
+            phase, chain_id = node_id.rsplit("_", 1)
+        except ValueError:
+            return None
+        if phase not in {"reach", "grasp", "move", "release"}:
+            return None
+        if not chain_id.isdigit():
+            return None
+        return chain_id
+
+    @staticmethod
+    def _graph_has_unresolved_failures(graph: TaskGraph) -> bool:
+        """True when a terminal graph contains failures not resolved by SKIP."""
+        skipped_chain_ids = set()
+        for node in graph.nodes:
+            if node.status != TaskStatus.SKIPPED:
+                continue
+            chain_id = IntentOSOrchestrator._object_chain_id(node.node_id)
+            if chain_id is None:
+                continue
+            skipped_chain_ids.add(chain_id)
+
+        for node in graph.nodes:
+            if node.status not in (TaskStatus.FAILED, TaskStatus.INVALIDATED):
+                continue
+            chain_id = IntentOSOrchestrator._object_chain_id(node.node_id)
+            if chain_id is None:
+                return True
+            if chain_id not in skipped_chain_ids:
+                return True
+        return False
+
+    def _create_objective_authorization(self, event: KernelEvent) -> None:
+        """Record the confirmed objective scope tied to this human confirmation."""
+        if self._context is None:
+            return
+        goal = self._context.graph.goal
+        self._objective_authorization = ObjectiveAuthorization(
+            objective_type=self._objective_type_for_goal(goal),
+            source_goal=goal,
+            phase2_token_id=event.details.get("phase2_token_id"),
+            proposal_id=self._context.proposal.proposal_id,
+        )
+
+    @staticmethod
+    def _objective_type_for_goal(goal: str) -> str:
+        goal_lower = goal.lower()
+        if any(word in goal_lower for word in ("clean", "clear", "tidy")):
+            return "table_clear"
+        return "goal_execution"
 
     def _current_segment_done(self) -> bool:
         if self._context is None:

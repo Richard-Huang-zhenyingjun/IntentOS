@@ -1,5 +1,12 @@
 from .attention_budget import AttentionBudget, InterruptClass, InterruptRequest
-from .orchestrator import IntentOSConfig, IntentOSOrchestrator, IntentOSState
+from .orchestrator import (
+    IntentOSConfig,
+    IntentOSOrchestrator,
+    IntentOSState,
+    ObjectiveAuthorization,
+    ObjectiveContinuationResult,
+    ObjectiveAuthorizationStatus,
+)
 from .recovery import FailureClass, RecoveryDecision, RecoveryEngine
 
 __all__ = [
@@ -10,6 +17,9 @@ __all__ = [
     "IntentOSOrchestrator",
     "IntentOSConfig",
     "IntentOSState",
+    "ObjectiveAuthorization",
+    "ObjectiveContinuationResult",
+    "ObjectiveAuthorizationStatus",
     "RecoveryDecision",
     "RecoveryEngine",
 ]
