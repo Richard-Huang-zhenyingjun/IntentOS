@@ -160,6 +160,7 @@ def main() -> int:
         continuation_results = []
         issued_tokens: list[str] = []
         injected_ids: list[int] = []
+        reports: list[str] = []
 
         original_issue = intentos._issue_current_segment_token
 
@@ -183,6 +184,14 @@ def main() -> int:
             preset_objects,
         )
         loop.set_label_map(label_map)
+        original_monitor_response = loop._monitor_system_response
+
+        def traced_monitor_response(message):
+            if message:
+                reports.append(message)
+            original_monitor_response(message)
+
+        loop._monitor_system_response = traced_monitor_response
 
         original_scene = loop._current_live_scene
 
@@ -245,6 +254,7 @@ def main() -> int:
             f"[E4 RESULT] objective_status={auth.status.name} "
             f"reason={auth.reason} confirmations=1"
         )
+        print(f"[E4 RESULT] report={reports[-1] if reports else ''}")
         print(
             f"[E4 RESULT] final_state={status.get('intentos_state')} "
             f"false_executions={system.executor._invariant_checker.false_executions}"

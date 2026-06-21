@@ -20,9 +20,15 @@ class SceneSummarizer:
         messy_cfg = config.get('scene_understanding', {}).get('messy_detection', {})
         self.min_objects = messy_cfg.get('min_objects', 3)
         self.spread_threshold = messy_cfg.get('spread_threshold', 0.18)
-        self.z_on_table_eps = messy_cfg.get('z_on_table_eps', 0.04)
+        self.z_on_table_eps = max(messy_cfg.get('z_on_table_eps', 0.04), 0.10)
         self.object_height = messy_cfg.get('object_height', 0.06)
         self.table_top_z = 0.6  # TODO: get from world artifacts
+        self.table_bounds_xy = (
+            config.get('world', {})
+            .get('messy_table', {})
+            .get('table_bounds_xy', [-0.35, 0.35, -0.25, 0.25])
+        )
+        self.table_xy_margin = messy_cfg.get('table_xy_margin', 0.03)
     
     def summarize(
         self,
@@ -60,8 +66,7 @@ class SceneSummarizer:
                 if obj_pos is None or obj_id is None:
                     continue
                 
-                obj_z = obj_pos[2]
-                is_on_table = self._is_on_table_z(obj_z)
+                is_on_table = self._is_on_table_position(obj_pos)
                 
                 info = ObjectInfo(
                     object_id=obj_id,
@@ -78,8 +83,7 @@ class SceneSummarizer:
                 for obj_id in artifacts.object_ids:
                     try:
                         pos, _ = p.getBasePositionAndOrientation(obj_id)
-                        obj_z = pos[2]
-                        is_on_table = self._is_on_table_z(obj_z)
+                        is_on_table = self._is_on_table_position(pos)
                         
                         info = ObjectInfo(
                             object_id=obj_id,
@@ -131,8 +135,18 @@ class SceneSummarizer:
     def _is_on_table_z(self, obj_z: float) -> bool:
         """Return True when an object's center is resting above the tabletop."""
         return (
-            obj_z > self.table_top_z
+            obj_z > self.table_top_z - 0.02
             and obj_z <= self.table_top_z + self.object_height + self.z_on_table_eps
         )
 
+    def _is_on_table_position(self, pos_xyz) -> bool:
+        """Return True when an object is vertically and laterally on the table."""
+        x_min, x_max, y_min, y_max = self.table_bounds_xy
+        margin = self.table_xy_margin
+        x, y, z = pos_xyz[:3]
+        return (
+            x_min - margin <= x <= x_max + margin
+            and y_min - margin <= y <= y_max + margin
+            and self._is_on_table_z(z)
+        )
 

@@ -43,6 +43,35 @@ class _Orchestrator:
         self.revoked.append(reason)
 
 
+class _TerminalOrchestrator(_Orchestrator):
+    def __init__(self, remaining):
+        super().__init__(remaining)
+        self.finished = []
+
+    def finish_objective_execution(self, reason, completed=True):
+        self.finished.append((reason, completed))
+
+
+class _TickingOrchestrator:
+    def __init__(self, state):
+        self.state = state
+        self.ticks = 0
+
+    def get_status(self):
+        return {"intentos_state": self.state}
+
+    def tick(self):
+        self.ticks += 1
+
+
+class _PinningExecutor:
+    def __init__(self):
+        self.pin_calls = 0
+
+    def pin_non_active_objects(self):
+        self.pin_calls += 1
+
+
 class _NoProgressOrchestrator(_Orchestrator):
     def continue_confirmed_objective(self, live_scene, abandoned):
         self.continue_calls.append(
@@ -170,7 +199,7 @@ def test_persistence_loop_revokes_when_cycle_makes_no_progress(capsys):
 
 
 def test_persistence_loop_reports_table_clear_when_nothing_remains(capsys):
-    orch = _Orchestrator(set())
+    orch = _TerminalOrchestrator(set())
     loop = _loop_with(orch)
 
     loop._pursue_until_satisfied()
@@ -178,4 +207,19 @@ def test_persistence_loop_reports_table_clear_when_nothing_remains(capsys):
     assert orch.continue_calls == []
     assert orch.completed == ["satisfied"]
     assert orch.revoked == []
+    assert orch.finished == [("satisfied", True)]
     assert "Table's clear." in capsys.readouterr().out
+
+
+def test_tick_until_stable_pins_scene_and_does_not_tick_while_awaiting_confirm():
+    loop = CommandLoop.__new__(CommandLoop)
+    executor = _PinningExecutor()
+    loop._world = SimpleNamespace(executor=executor)
+    loop._orch = _TickingOrchestrator("AWAITING_CONFIRM")
+    loop._monitor_orchestrator_update = lambda: None
+    loop._tick_rate_hz = 1000.0
+
+    loop._tick_until_stable()
+
+    assert executor.pin_calls == 1
+    assert loop._orch.ticks == 0

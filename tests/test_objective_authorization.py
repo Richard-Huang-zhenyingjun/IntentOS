@@ -271,6 +271,48 @@ def test_continue_confirmed_objective_after_completed_or_revoked_is_refused():
     assert orch._objective_authorization.status == ObjectiveAuthorizationStatus.REVOKED
 
 
+def test_finish_objective_execution_clears_stale_graph_and_token():
+    graph = make_graph()
+    orch, kernel, _, _ = make_orchestrator(graph)
+    kernel.active_token_id = "auth_abc"
+    orch._objective_authorization = active_objective_auth("auth_abc")
+    orch._context = type(
+        "Ctx",
+        (),
+        {
+            "graph": graph,
+            "proposal": None,
+            "plan_result": None,
+            "started_at": 0.0,
+            "nodes_completed": 0,
+            "last_error": None,
+        },
+    )()
+    orch._segments = [
+        CheckpointSegment(
+            segment_id="seg",
+            node_ids=["n1"],
+            requires_confirmation=False,
+            summary="seg",
+        )
+    ]
+    orch._current_segment_idx = 0
+    orch._current_token = ScopedExecutionToken.issue(
+        orch._segments[0],
+        node_definitions=[{"node_id": "n1", "action_type": "reach"}],
+    )
+    orch._state = IntentOSState.EXECUTING
+
+    orch.finish_objective_execution("satisfied", completed=True)
+
+    assert orch.state == IntentOSState.COMPLETE
+    assert orch._context is None
+    assert orch._segments == []
+    assert orch._current_token is None
+    assert orch._current_segment_idx == 0
+    assert orch._objective_authorization.status == ObjectiveAuthorizationStatus.COMPLETED
+
+
 def test_objective_auth_alone_does_not_bypass_scoped_primitive_gate():
     graph = make_graph(
         [
@@ -307,4 +349,3 @@ def test_objective_auth_alone_does_not_bypass_scoped_primitive_gate():
     assert orch._objective_authorization.status == ObjectiveAuthorizationStatus.REVOKED
     assert orch._objective_authorization.reason == "unauthorized_scoped_token"
     assert kernel.false_executions == 0
-

@@ -561,7 +561,16 @@ class CommandLoop:
         print(f"\n  {msg}", flush=True)
         self._monitor_execution_complete(self._session_bin_count)
         self._monitor_system_response(msg)
+        self._finish_objective_execution(stop_reason)
         self._last_reported_complete = True
+
+    def _finish_objective_execution(self, stop_reason: Optional[str]) -> None:
+        """Clear the confirmed objective graph after the persistence loop exits."""
+        finish = getattr(self._orch, "finish_objective_execution", None)
+        if not callable(finish):
+            return
+        completed = stop_reason == "satisfied"
+        finish(stop_reason or "unknown", completed=completed)
 
     def _current_live_scene(self):
         """Return a live SceneSummary from the Phase 2 scene summarizer."""
@@ -748,9 +757,32 @@ class CommandLoop:
     def _tick_until_stable(self, max_ticks: int = 5) -> None:
         """Advance orchestrator a few ticks after each command."""
         for _ in range(max_ticks):
+            state = self._orch.get_status().get("intentos_state")
+            if state == "AWAITING_CONFIRM":
+                self._pin_scene_for_confirmation()
+                self._monitor_orchestrator_update()
+                return
+            if state == "PLANNING":
+                self._pin_scene_for_confirmation()
             self._orch.tick()
+            state_after = self._orch.get_status().get("intentos_state")
+            if state_after in {"PLANNING", "AWAITING_CONFIRM"}:
+                self._pin_scene_for_confirmation()
             self._monitor_orchestrator_update()
             time.sleep(1.0 / self._tick_rate_hz)
+
+    def _pin_scene_for_confirmation(self) -> None:
+        """
+        Hold movable objects fixed while no confirmed execution owns the scene.
+
+        Phase 2 ticks still step PyBullet during planning/confirmation, so this
+        reuses the executor's non-active object pinning to keep the proposed
+        scene identical to the scene that will be executed after confirmation.
+        """
+        executor = getattr(self._world, "executor", None)
+        pin = getattr(executor, "pin_non_active_objects", None)
+        if callable(pin):
+            pin()
 
     def _maybe_print_execution_update(self) -> None:
         status = self._orch.get_status()
@@ -1039,9 +1071,16 @@ class CommandLoop:
         """Tick until orchestrator reaches target state or times out."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            self._orch.tick()
-            self._monitor_orchestrator_update()
             status = self._orch.get_status()
+            if status.get("intentos_state") == target_state:
+                return
+            if status.get("intentos_state") in {"PLANNING", "AWAITING_CONFIRM"}:
+                self._pin_scene_for_confirmation()
+            self._orch.tick()
+            status = self._orch.get_status()
+            if status.get("intentos_state") in {"PLANNING", "AWAITING_CONFIRM"}:
+                self._pin_scene_for_confirmation()
+            self._monitor_orchestrator_update()
             if status.get("intentos_state") == target_state:
                 return
             time.sleep(1.0 / self._tick_rate_hz)

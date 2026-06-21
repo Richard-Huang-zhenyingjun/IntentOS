@@ -6170,3 +6170,198 @@ pybullet build time: Sep  3 2024 12:57:43
 2026-06-18 23:14:30,338 src.intentos.orchestrator INFO: Recovery: retry node grasp_0
 2026-06-18 23:14:34,035 src.intentos.orchestrator INFO: Recovery: skipped node chain from grasp_0
 2026-06-18 23:15:07,669 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (16 steps, 54.0s)
+Traceback (most recent call last):
+  File "/Users/richardhuang/Intent Interface Prototype /scripts/run_workspace.py", line 266, in main
+    if args.e3_disturbance:
+    ^^^^^^^^^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/interaction/command_loop.py", line 243, in run
+    self._monitor_orchestrator_update()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/interaction/command_loop.py", line 1065, in _monitor_orchestrator_update
+    self._bridge_monitor.on_orchestrator_update(self._orch.get_status())
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/monitor/state_bridge.py", line 101, in on_orchestrator_update
+    self._post("/conversation", {"role": "system", "text": text})
+    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/monitor/state_bridge.py", line 292, in _post
+    push_state_update()
+        ~~~~~~~~~~~~~^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_api.py", line 304, in post
+    return request(
+        "POST",
+    ...<13 lines>...
+        trust_env=trust_env,
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_api.py", line 109, in request
+    return client.request(
+           ~~~~~~~~~~~~~~^
+        method=method,
+        ^^^^^^^^^^^^^^
+    ...<8 lines>...
+        follow_redirects=follow_redirects,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+        request,
+    ...<2 lines>...
+        history=[],
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+        request,
+        follow_redirects=follow_redirects,
+        history=history,
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+        pool_request.request
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+        self.READ_NUM_BYTES, timeout=timeout
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/httpcore/_backends/sync.py", line 128, in read
+    return self._sock.recv(max_bytes)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/richardhuang/Intent Interface Prototype /scripts/run_workspace.py", line 318, in <module>
+  File "/Users/richardhuang/Intent Interface Prototype /scripts/run_workspace.py", line 270, in main
+    loop = CommandLoop(
+        ^^^^^^^^^^^^^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/interaction/session_logger.py", line 142, in close
+    self._write(summary)
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/Users/richardhuang/Intent Interface Prototype /src/interaction/session_logger.py", line 156, in _write
+    self._file.write(json.dumps(obj) + "\n")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-19 23:26:33,131 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-19 23:26:33,140 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-19 23:26:33,256 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=12, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-19 23:26:33,257 src.kernel.execution_kernel INFO: Proposal e3c4aaf3 submitted to kernel
+2026-06-19 23:26:33,257 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-19 23:26:35,450 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-19 23:26:35,450 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-19 23:27:11,359 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (12 steps, 35.9s)
+2026-06-19 23:27:23,353 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 11.9s)
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 15:51:53,099 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 15:51:53,115 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 15:51:53,232 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=12, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 15:51:53,233 src.kernel.execution_kernel INFO: Proposal 09a7161a submitted to kernel
+2026-06-20 15:51:53,233 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 15:51:56,255 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 15:51:56,255 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 15:52:33,026 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (12 steps, 36.7s)
+2026-06-20 15:52:45,293 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 12.2s)
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 16:09:28,749 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 16:09:28,764 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 16:09:28,885 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=12, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 16:09:28,885 src.kernel.execution_kernel INFO: Proposal 1408c00c submitted to kernel
+2026-06-20 16:09:28,885 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 16:09:31,244 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 16:09:31,244 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 16:10:07,270 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (12 steps, 36.0s)
+2026-06-20 16:10:19,503 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 12.1s)
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 16:23:09,255 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 16:23:09,263 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 16:23:09,381 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=4, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 16:23:09,381 src.kernel.execution_kernel INFO: Proposal 9ab4d04e submitted to kernel
+2026-06-20 16:23:09,381 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 16:23:11,829 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 16:23:11,829 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 16:23:11,873 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:23:12,088 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:23:12,336 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:23:12,568 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:23:12,800 src.intentos.orchestrator ERROR: Recovery: escalation - unauthorized_execution_blocked. All agents stopped.
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 16:31:53,035 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 16:31:53,037 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 16:31:53,144 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=4, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 16:31:53,146 src.kernel.execution_kernel INFO: Proposal 61bce6c2 submitted to kernel
+2026-06-20 16:31:53,146 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 16:32:14,099 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 16:32:14,100 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 16:32:14,103 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:32:14,309 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:32:14,520 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:32:14,731 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:32:14,938 src.intentos.orchestrator ERROR: Recovery: escalation - unauthorized_execution_blocked. All agents stopped.
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 16:38:30,208 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 16:38:30,208 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 16:38:30,318 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=4, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 16:38:30,318 src.kernel.execution_kernel INFO: Proposal 001e632f submitted to kernel
+2026-06-20 16:38:30,318 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 16:38:30,861 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 16:38:30,863 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 16:38:30,868 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:38:31,073 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:38:31,292 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:38:31,500 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:38:31,715 src.intentos.orchestrator ERROR: Recovery: escalation - unauthorized_execution_blocked. All agents stopped.
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 16:40:05,227 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 16:40:05,228 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 16:40:05,340 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=4, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 16:40:05,340 src.kernel.execution_kernel INFO: Proposal ae8d7455 submitted to kernel
+2026-06-20 16:40:05,340 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 16:40:05,879 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 16:40:05,880 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 16:40:05,883 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:40:06,098 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:40:06,318 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:40:06,539 src.intentos.orchestrator INFO: Recovery: retry node reach_0
+2026-06-20 16:40:06,757 src.intentos.orchestrator ERROR: Recovery: escalation - unauthorized_execution_blocked. All agents stopped.
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 17:18:21,026 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 17:18:21,027 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 17:18:21,132 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=4, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 17:18:21,132 src.kernel.execution_kernel INFO: Proposal 921179a2 submitted to kernel
+2026-06-20 17:18:21,132 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 17:18:21,133 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 17:18:21,133 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 17:18:32,872 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 11.7s)
+2026-06-20 17:18:44,715 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 11.8s)
+2026-06-20 17:18:56,852 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 12.1s)
+2026-06-20 17:19:08,674 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (4 steps, 11.8s)
+pybullet build time: Sep  3 2024 12:57:43
+2026-06-20 17:19:18,792 src.intentos.orchestrator INFO: Goal accepted: 'clean the table'
+2026-06-20 17:19:18,793 src.intentos.orchestrator INFO: Submitting planning for 'clean the table' to background thread
+2026-06-20 17:19:18,896 src.intentos.orchestrator INFO: Plan complete: source=heuristic, steps=16, uncertainty=medium, warning=Plan generated by heuristic (LLM unavailable).
+2026-06-20 17:19:18,896 src.kernel.execution_kernel INFO: Proposal be3b8d12 submitted to kernel
+2026-06-20 17:19:18,897 src.intentos.attention_budget INFO: Attention event: confirmation recorded | load=0.25 | rate=1.0/min | cooldown=20s
+2026-06-20 17:19:18,897 src.interaction.confirm_bridge INFO: ConfirmBridge: all guards passed. Beginning confirmation sequence.
+2026-06-20 17:19:18,898 src.intentos.orchestrator INFO: Human confirmed proposal - beginning execution
+2026-06-20 17:20:06,828 src.intentos.orchestrator INFO: Goal achieved: 'clean the table' (16 steps, 47.9s)

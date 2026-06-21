@@ -59,6 +59,35 @@ class StateBridge:
     def set_label_map(self, label_map: dict) -> None:
         self._label_map = label_map
 
+    def add_object(
+        self,
+        object_id: str,
+        label: str,
+        body_id: int,
+        color: str = "#9b59b6",
+        x: float = 0.72,
+        y: float = 0.58,
+    ) -> None:
+        """Add a live-injected object to the monitor canvas."""
+        if any(obj.get("id") == object_id for obj in self._objects):
+            self._label_map[object_id] = body_id
+            return
+        self._objects.append(
+            {
+                "id": object_id,
+                "label": label,
+                "color": color,
+                "x": x,
+                "y": y,
+                "in_bin": False,
+                "in_tray": False,
+                "highlighted": True,
+                "visible": True,
+            }
+        )
+        self._label_map[object_id] = body_id
+        self._push_workspace()
+
     def on_user_input(self, text: str) -> None:
         """Call when user types a command."""
         workspace_state.add_conversation_turn("user", text)

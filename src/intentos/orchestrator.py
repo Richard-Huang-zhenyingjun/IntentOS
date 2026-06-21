@@ -183,6 +183,26 @@ class IntentOSOrchestrator:
         auth.reason = reason
         self._invalidate_phase2_authorization(reason)
 
+    def finish_objective_execution(self, reason: str, completed: bool = True) -> None:
+        """
+        Terminate an objective-loop execution without leaving stale graph work.
+
+        The persistence loop may satisfy or honestly stop an objective while the
+        original confirmed graph is still represented in IntentOS. Once the loop
+        has reported a terminal outcome, no later generic tick should dispatch
+        that old graph.
+        """
+        if completed:
+            self.complete_objective_authorization(reason)
+        else:
+            self.revoke_objective_authorization(reason)
+        self._context = None
+        self._pending_goal = None
+        self._segments = []
+        self._current_segment_idx = 0
+        self._current_token = None
+        self._state = IntentOSState.COMPLETE
+
     def continue_confirmed_objective(
         self,
         live_scene: Any,
