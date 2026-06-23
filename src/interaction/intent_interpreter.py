@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # Canonical vocabulary. Everything else is checked against this.
-CONTROL_INTENTS = ["stop", "pause", "resume"]
+CONTROL_INTENTS = ["stop", "pause", "resume", "leave it"]
 
 ACTION_INTENTS = [
     "clean the table",
@@ -49,6 +49,7 @@ _CONTROL_TRIGGERS = {
     "stop": [r"\bstop\b", r"\bhalt\b", r"\bfreeze\b", r"\babort\b", r"\bwait\b"],
     "pause": [r"\bpause\b", r"\bhold on\b", r"\bhold up\b"],
     "resume": [r"\bresume\b", r"\bcontinue\b", r"\bcarry on\b", r"\bkeep going\b"],
+    "leave it": [r"\bleave it\b", r"\bleave it for now\b", r"\bleave them\b"],
 }
 
 
@@ -63,6 +64,9 @@ def _detect_control(text_lower: str) -> str | None:
     for pattern in _CONTROL_TRIGGERS["resume"]:
         if re.search(pattern, text_lower):
             return "resume"
+    for pattern in _CONTROL_TRIGGERS["leave it"]:
+        if re.search(pattern, text_lower):
+            return "leave it"
     return None
 
 

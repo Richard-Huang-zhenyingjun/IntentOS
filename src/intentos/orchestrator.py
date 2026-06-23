@@ -62,6 +62,8 @@ class ObjectiveAuthorization:
     source_goal: str
     phase2_token_id: Optional[str]
     proposal_id: Optional[str] = None
+    authorization_source: str = "human_confirm"
+    authorization_reason: Optional[str] = None
     status: ObjectiveAuthorizationStatus = ObjectiveAuthorizationStatus.ACTIVE
     reason: Optional[str] = None
 
@@ -128,6 +130,9 @@ class IntentOSOrchestrator:
         self._segments: list[CheckpointSegment] = []
         self._current_segment_idx: int = 0
         self._current_token: Optional[ScopedExecutionToken] = None
+        self._stop_requested_callback: Optional[Any] = None
+        self._last_continuation_stop_reason: Optional[str] = None
+        self._last_safe_stop_outcomes: dict[int, dict[str, Optional[str]]] = {}
         self._objective_authorization: Optional[ObjectiveAuthorization] = None
         self._planning_executor = cf.ThreadPoolExecutor(
             max_workers=1,
@@ -183,6 +188,35 @@ class IntentOSOrchestrator:
         auth.reason = reason
         self._invalidate_phase2_authorization(reason)
 
+    def authorize_objective_extension_from_human(
+        self,
+        phase2_token_id: str,
+        source_goal: str,
+        proposal_id: Optional[str] = None,
+        reason: str = "keep_going",
+    ) -> None:
+        """
+        Create a fresh objective authorization from an explicit human extension.
+
+        This is used after a max-cycles stop-and-ask. The user command creates
+        the new Phase 2 token; this record only binds that token to the same
+        table-clear objective scope.
+        """
+        self._objective_authorization = ObjectiveAuthorization(
+            objective_type=self._objective_type_for_goal(source_goal),
+            source_goal=source_goal,
+            phase2_token_id=phase2_token_id,
+            proposal_id=proposal_id,
+            authorization_source="human_keep_going",
+            authorization_reason=reason,
+        )
+        logger.info(
+            "Objective authorization extended by human: goal=%r token=%s reason=%s",
+            source_goal,
+            phase2_token_id,
+            reason,
+        )
+
     def finish_objective_execution(self, reason: str, completed: bool = True) -> None:
         """
         Terminate an objective-loop execution without leaving stale graph work.
@@ -208,6 +242,7 @@ class IntentOSOrchestrator:
         live_scene: Any,
         abandoned_object_ids: set[int],
         timeout_s: float = 60.0,
+        stop_requested: Any = None,
     ) -> ObjectiveContinuationResult:
         """
         Continue a confirmed objective using a fresh graph and scoped token.
@@ -269,21 +304,27 @@ class IntentOSOrchestrator:
             return ObjectiveContinuationResult(False, "could not issue scoped token")
 
         self._state = IntentOSState.EXECUTING
+        self._stop_requested_callback = stop_requested
+        self._last_continuation_stop_reason = None
+        self._last_safe_stop_outcomes = {}
         deadline = time.monotonic() + timeout_s
-        while self._state == IntentOSState.EXECUTING and time.monotonic() < deadline:
-            self.tick()
+        try:
+            while self._state == IntentOSState.EXECUTING and time.monotonic() < deadline:
+                self.tick()
+        finally:
+            self._stop_requested_callback = None
 
         if self._state == IntentOSState.EXECUTING:
             return ObjectiveContinuationResult(
                 False,
                 "objective continuation timed out",
-                self._object_outcomes(graph),
+                self._object_outcomes_with_safe_stop(graph),
             )
 
         return ObjectiveContinuationResult(
             self._state == IntentOSState.COMPLETE,
-            self._state.name.lower(),
-            self._object_outcomes(graph),
+            self._last_continuation_stop_reason or self._state.name.lower(),
+            self._object_outcomes_with_safe_stop(graph),
         )
 
     def tick(self) -> None:
@@ -527,6 +568,7 @@ class IntentOSOrchestrator:
             node_ids=segment.node_ids,
             token=self._current_token,
             graph=graph,
+            stop_requested=getattr(self, "_stop_requested_callback", None),
         )
         dispatch_result.segment_id = segment.segment_id
 
@@ -538,6 +580,14 @@ class IntentOSOrchestrator:
                     node.action_type,
                     result.success,
                 )
+
+        if dispatch_result.stopped_by_user:
+            logger.info("User stop requested at primitive boundary; safe-releasing if needed.")
+            self._last_safe_stop_outcomes = self._coordinator.safe_release_all()
+            self._state = IntentOSState.COMPLETE
+            self._current_token = None
+            self._last_continuation_stop_reason = "user_stopped"
+            return
 
         if not dispatch_result.all_succeeded:
             for failed_node_id in dispatch_result.failed_node_ids:
@@ -895,6 +945,15 @@ class IntentOSOrchestrator:
                 continue
 
             reason = next((node.error for node in nodes if node.error), None)
+            destination = next(
+                (
+                    (node.parameters or {}).get("target")
+                    for node in nodes
+                    if node.action_type == "move"
+                    and (node.parameters or {}).get("target") in {"bin", "tray"}
+                ),
+                None,
+            )
             statuses = [node.status for node in nodes]
             if any(status == TaskStatus.SKIPPED for status in statuses):
                 outcome = "SKIPPED"
@@ -907,6 +966,20 @@ class IntentOSOrchestrator:
             outcomes[int(object_id)] = {
                 "status": outcome,
                 "reason": reason,
+                "destination": destination,
+            }
+        return outcomes
+
+    def _object_outcomes_with_safe_stop(
+        self,
+        graph: TaskGraph,
+    ) -> dict[int, dict[str, Optional[str]]]:
+        outcomes = self._object_outcomes(graph)
+        for object_id, outcome in self._last_safe_stop_outcomes.items():
+            outcomes[int(object_id)] = {
+                "status": outcome.get("status"),
+                "reason": outcome.get("reason"),
+                "destination": outcome.get("destination"),
             }
         return outcomes
 

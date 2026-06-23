@@ -271,6 +271,25 @@ def test_continue_confirmed_objective_after_completed_or_revoked_is_refused():
     assert orch._objective_authorization.status == ObjectiveAuthorizationStatus.REVOKED
 
 
+def test_human_keep_going_extension_creates_active_objective_authorization():
+    orch, _, _, _ = make_orchestrator()
+
+    orch.authorize_objective_extension_from_human(
+        phase2_token_id="auth_keep_going",
+        source_goal="clean the table",
+        proposal_id="proposal_1",
+        reason="keep_going",
+    )
+
+    auth = orch._objective_authorization
+    assert auth.status == ObjectiveAuthorizationStatus.ACTIVE
+    assert auth.objective_type == "table_clear"
+    assert auth.phase2_token_id == "auth_keep_going"
+    assert auth.proposal_id == "proposal_1"
+    assert auth.authorization_source == "human_keep_going"
+    assert auth.authorization_reason == "keep_going"
+
+
 def test_finish_objective_execution_clears_stale_graph_and_token():
     graph = make_graph()
     orch, kernel, _, _ = make_orchestrator(graph)

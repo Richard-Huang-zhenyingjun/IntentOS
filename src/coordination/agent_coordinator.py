@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from src.agents.agent_base import ActionResult, AgentAction
@@ -44,6 +44,8 @@ class DispatchResult:
     all_succeeded: bool
     failed_node_ids: list[str]
     total_duration_ms: float
+    stopped_by_user: bool = False
+    safe_stop_outcomes: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 class AgentCoordinator:
@@ -70,6 +72,7 @@ class AgentCoordinator:
         node_ids: list[str],
         token: Any,
         graph: TaskGraph,
+        stop_requested: Any = None,
     ) -> DispatchResult:
         """
         Execute all nodes in a segment, respecting resource and timing constraints.
@@ -84,8 +87,16 @@ class AgentCoordinator:
         active_agents: set[str] = set()
         last_progress = time.monotonic()
         segment_failed = False
+        stop_after_current = False
+        stop_abort_requested = False
 
         while True:
+            if callable(stop_requested) and stop_requested():
+                stop_after_current = True
+                if not stop_abort_requested:
+                    self._abort_active_agents_for_user_stop(active_agents)
+                    stop_abort_requested = True
+
             ready = self._ready_to_dispatch(
                 segment_nodes=segment_nodes,
                 graph=graph,
@@ -93,7 +104,7 @@ class AgentCoordinator:
                 completion_times=completion_times,
             )
 
-            ready_to_dispatch = [] if segment_failed else ready
+            ready_to_dispatch = [] if (segment_failed or stop_after_current) else ready
             for node in ready_to_dispatch:
                 if node.agent_id in active_agents:
                     continue
@@ -161,6 +172,9 @@ class AgentCoordinator:
                 self._release_resources(node_id)
                 last_progress = time.monotonic()
 
+            if stop_after_current and not pending_futures:
+                break
+
             if segment_failed and not pending_futures:
                 break
 
@@ -191,7 +205,55 @@ class AgentCoordinator:
             all_succeeded=len(failed) == 0,
             failed_node_ids=failed,
             total_duration_ms=total_ms,
+            stopped_by_user=stop_after_current,
+            safe_stop_outcomes={},
         )
+
+    def safe_release_all(self, timeout_s: float = 20.0) -> dict[int, dict[str, Any]]:
+        """Ask agents to place any carried object safely before stopping."""
+        outcomes: dict[int, dict[str, Any]] = {}
+        for agent in self._registry.all_agents():
+            release = getattr(agent, "safe_release_if_holding", None)
+            if not callable(release):
+                continue
+            try:
+                released = release(timeout_s=timeout_s)
+            except TypeError:
+                released = release()
+            except Exception:
+                logger.exception("Safe release failed for agent %s", agent)
+                continue
+            if not released:
+                continue
+            getter = getattr(agent, "get_last_safe_stop_release", None)
+            if not callable(getter):
+                continue
+            outcome = getter()
+            if not outcome:
+                continue
+            object_id = outcome.get("object_id")
+            if object_id is None:
+                continue
+            outcomes[int(object_id)] = {
+                "status": outcome.get("status"),
+                "reason": outcome.get("reason"),
+                "destination": outcome.get("destination"),
+            }
+        return outcomes
+
+    def _abort_active_agents_for_user_stop(self, active_agents: set[str]) -> None:
+        """Ask currently running agents to stop at a safe primitive boundary."""
+        for agent_id in list(active_agents):
+            agent = self._registry.get(agent_id)
+            if agent is None:
+                continue
+            abort = getattr(agent, "abort_for_user_stop", None)
+            if not callable(abort):
+                continue
+            try:
+                abort()
+            except Exception:
+                logger.exception("User-stop abort failed for agent %s", agent_id)
 
     def emergency_stop_all(self) -> None:
         """Fire-and-forget stop on all registered agents. Never raises."""

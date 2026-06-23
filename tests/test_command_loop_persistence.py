@@ -1,3 +1,4 @@
+from collections import deque
 from types import SimpleNamespace
 
 from src.interaction.command_loop import CommandLoop
@@ -19,11 +20,12 @@ class _Orchestrator:
             "task_graph": [],
         }
 
-    def continue_confirmed_objective(self, live_scene, abandoned):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
         self.continue_calls.append(
             {
                 "live": {obj.object_id for obj in live_scene.objects_on_table},
                 "abandoned": set(abandoned),
+                "stop_requested_present": callable(kwargs.get("stop_requested")),
             }
         )
         self.remaining.discard(5)
@@ -32,7 +34,7 @@ class _Orchestrator:
             reason="complete",
             outcomes={
                 4: {"status": "SKIPPED", "reason": "grasp_failed"},
-                5: {"status": "DONE", "reason": None},
+                5: {"status": "DONE", "reason": None, "destination": "bin"},
             },
         )
 
@@ -50,6 +52,37 @@ class _TerminalOrchestrator(_Orchestrator):
 
     def finish_objective_execution(self, reason, completed=True):
         self.finished.append((reason, completed))
+
+
+class _ExtensionOrchestrator(_TerminalOrchestrator):
+    def __init__(self, remaining):
+        super().__init__(remaining)
+        self.extensions = []
+
+    def authorize_objective_extension_from_human(
+        self,
+        phase2_token_id,
+        source_goal,
+        proposal_id=None,
+        reason="keep_going",
+    ):
+        self.extensions.append(
+            {
+                "phase2_token_id": phase2_token_id,
+                "source_goal": source_goal,
+                "proposal_id": proposal_id,
+                "reason": reason,
+            }
+        )
+
+
+class _World:
+    def __init__(self):
+        self.authorized = []
+
+    def authorize_for_intentos(self, source, quality):
+        self.authorized.append({"source": source, "quality": quality})
+        return SimpleNamespace(token_id="auth_keep_going")
 
 
 class _TickingOrchestrator:
@@ -73,7 +106,7 @@ class _PinningExecutor:
 
 
 class _NoProgressOrchestrator(_Orchestrator):
-    def continue_confirmed_objective(self, live_scene, abandoned):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
         self.continue_calls.append(
             {
                 "live": {obj.object_id for obj in live_scene.objects_on_table},
@@ -85,6 +118,61 @@ class _NoProgressOrchestrator(_Orchestrator):
             reason="complete",
             outcomes={
                 4: {"status": "PENDING", "reason": None},
+            },
+        )
+
+
+class _AllDoneOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        live_ids = {obj.object_id for obj in live_scene.objects_on_table}
+        self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
+        for object_id in live_ids:
+            self.remaining.discard(object_id)
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                object_id: {"status": "DONE", "reason": None, "destination": "bin"}
+                for object_id in live_ids
+            },
+        )
+
+
+class _MaxCycleOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        self.continue_calls.append(
+            {
+                "live": {obj.object_id for obj in live_scene.objects_on_table},
+                "abandoned": set(abandoned),
+            }
+        )
+        self.remaining.discard(5)
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                5: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
+class _MidCycleStopOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        self.continue_calls.append(
+            {
+                "live": {obj.object_id for obj in live_scene.objects_on_table},
+                "abandoned": set(abandoned),
+            }
+        )
+        stop_requested = kwargs.get("stop_requested")
+        assert callable(stop_requested)
+        assert stop_requested() is True
+        self.remaining.discard(4)
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="user_stopped",
+            outcomes={
+                4: {"status": "DONE", "reason": None, "destination": "bin"},
             },
         )
 
@@ -178,11 +266,12 @@ def test_persistence_loop_continues_under_one_objective_and_abandons_skips(capsy
         "red_block": {"in_bin": False, "in_tray": False},
         "blue_block": {"in_bin": True, "in_tray": False},
     }
-    assert (
-        "Cleaned 1 of 2. I couldn't grip the red block after 5 tries, "
-        "so I left it on the table. Want me to try the red block again, "
-        "or leave it?"
-    ) in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Finished the reachable work." in out
+    assert "placed 1 item(s) in the bin" in out
+    assert "left the red block on the table" in out
+    assert "I couldn't grip the red block after 5 tries" in out
+    assert "Table's clear" not in out
 
 
 def test_persistence_loop_revokes_when_cycle_makes_no_progress(capsys):
@@ -208,7 +297,22 @@ def test_persistence_loop_reports_table_clear_when_nothing_remains(capsys):
     assert orch.completed == ["satisfied"]
     assert orch.revoked == []
     assert orch.finished == [("satisfied", True)]
-    assert "Table's clear." in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Table's clear." in out
+    assert "Say 'clean the table'" not in out
+
+
+def test_persistence_loop_full_clear_reports_real_placed_count(capsys):
+    orch = _AllDoneOrchestrator({4, 5})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=3)
+
+    assert orch.completed == ["satisfied"]
+    out = capsys.readouterr().out
+    assert "Table's clear. I placed 2 item(s)." in out
+    assert "still on the table" not in out
+    assert "Say 'clean the table'" not in out
 
 
 def test_tick_until_stable_pins_scene_and_does_not_tick_while_awaiting_confirm():
@@ -223,3 +327,165 @@ def test_tick_until_stable_pins_scene_and_does_not_tick_while_awaiting_confirm()
 
     assert executor.pin_calls == 1
     assert loop._orch.ticks == 0
+
+
+def test_persistence_loop_stop_between_cycles_finishes_without_continuing(capsys):
+    orch = _TerminalOrchestrator({4})
+    loop = _loop_with(orch)
+    loop._browser_queue = ["stop"]
+
+    loop._pursue_until_satisfied(max_cycles=2)
+
+    assert orch.continue_calls == []
+    assert orch.revoked == ["user_stopped"]
+    assert orch.finished == [("user_stopped", False)]
+    out = capsys.readouterr().out
+    assert "Stopped safely." in out
+    assert "1 item(s) still on the table" in out
+    assert "Say 'clean the table' or 'keep going' to continue." in out
+
+
+def test_persistence_loop_stop_during_cycle_finishes_after_safe_boundary(capsys):
+    orch = _MidCycleStopOrchestrator({4, 5})
+    loop = _loop_with(orch)
+    loop._browser_queue = deque(["stop"])
+    loop._poll_between_cycle_signal = lambda: None
+
+    loop._pursue_until_satisfied(max_cycles=2)
+
+    assert len(orch.continue_calls) == 1
+    assert orch.revoked == ["user_stopped"]
+    assert orch.finished == [("user_stopped", False)]
+    assert loop._session_bin_count == 1
+    out = capsys.readouterr().out
+    assert "Stopped safely." in out
+    assert "placed 1 item(s) in the bin" in out
+    assert "1 item(s) still on the table" in out
+    assert "Say 'clean the table' or 'keep going' to continue." in out
+
+
+def test_max_cycles_handoff_has_one_question_and_no_concatenation(capsys):
+    orch = _MaxCycleOrchestrator({4, 5})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=1)
+
+    out = capsys.readouterr().out
+    assert orch.revoked == ["max_cycles"]
+    assert "Table still isn't clear after 1 rounds." in out
+    assert "placed 1 item(s) in the bin" in out
+    assert "1 item(s) still on the table" in out
+    assert out.count("?") == 1
+    assert "Keep going, or leave it?" in out
+    assert "Want me to try" not in out
+
+
+def test_keep_going_creates_human_sourced_objective_extension(capsys):
+    orch = _ExtensionOrchestrator(set())
+    loop = _loop_with(orch)
+    loop._world = _World()
+    loop._pending_objective_decision = {
+        "goal": "clean the table",
+        "cycle_cap": 4,
+        "abandoned": set(),
+        "placed": set(),
+        "outcomes": {},
+    }
+    loop._active_objective_state = dict(loop._pending_objective_decision)
+    pursued = []
+    loop._pursue_until_satisfied = lambda max_cycles=None: pursued.append(max_cycles)
+
+    response = loop._handle_resume()
+
+    assert response == ""
+    assert loop._world.authorized == [
+        {"source": "keyboard:keep_going", "quality": 1.0}
+    ]
+    assert orch.extensions == [
+        {
+            "phase2_token_id": "auth_keep_going",
+            "source_goal": "clean the table",
+            "proposal_id": None,
+            "reason": "keep_going",
+        }
+    ]
+    assert pursued == [4]
+    assert "Human keep-going authorization issued" in capsys.readouterr().out
+
+
+def test_leave_it_finalizes_pending_objective_decision():
+    orch = _TerminalOrchestrator(set())
+    loop = _loop_with(orch)
+    loop._pending_objective_decision = {
+        "goal": "clean the table",
+        "cycle_cap": 4,
+    }
+    loop._active_objective_state = dict(loop._pending_objective_decision)
+
+    response = loop._handle_leave()
+
+    assert response == "Okay, leaving it here."
+    assert loop._pending_objective_decision is None
+    assert loop._active_objective_state is None
+    assert orch.finished == [("user_left_it", False)]
+
+
+def test_leave_it_handoff_summarizes_done_and_remaining_state():
+    orch = _TerminalOrchestrator({4})
+    loop = _loop_with(orch)
+    loop._pending_objective_decision = {
+        "goal": "clean the table",
+        "cycle_cap": 4,
+        "abandoned": set(),
+        "placed": {5},
+        "outcomes": {
+            5: {"status": "DONE", "reason": None, "destination": "bin"},
+        },
+    }
+    loop._active_objective_state = dict(loop._pending_objective_decision)
+
+    response = loop._handle_leave()
+
+    assert "Okay, leaving it here." in response
+    assert "placed 1 item(s) in the bin" in response
+    assert "1 item(s) still on the table" in response
+    assert "Say 'clean the table' or 'keep going' to continue." in response
+
+
+def test_handoff_guard_marks_done_but_live_object_unknown_not_placed():
+    orch = _TerminalOrchestrator({4})
+    loop = _loop_with(orch)
+
+    state = loop._build_handoff_state(
+        stop_reason="satisfied",
+        live_scene=_scene({4}),
+        outcomes={4: {"status": "DONE", "reason": None, "destination": "bin"}},
+        abandoned=set(),
+    )
+    response = loop._presenter.present_handoff_summary(state)
+
+    assert state.reason == "no_progress"
+    assert state.objects[0].status == "unknown"
+    assert "state unclear for the red block" in response
+    assert "Table's clear" not in response
+    assert "placed 1 item" not in response
+
+
+def test_handoff_treats_user_stop_set_down_as_remaining_without_warning():
+    orch = _TerminalOrchestrator({4})
+    loop = _loop_with(orch)
+
+    state = loop._build_handoff_state(
+        stop_reason="user_stopped",
+        live_scene=_scene({4}),
+        outcomes={4: {"status": "SET_DOWN", "reason": "user_stopped", "destination": "table"}},
+        abandoned=set(),
+    )
+    response = loop._presenter.present_handoff_summary(state)
+
+    assert state.warnings == ()
+    assert state.objects[0].status == "remaining"
+    assert state.objects[0].location == "table"
+    assert "Current state: 1 item(s) still on the table." in response
+    assert "state unclear" not in response
+    assert "placed 1 item" not in response

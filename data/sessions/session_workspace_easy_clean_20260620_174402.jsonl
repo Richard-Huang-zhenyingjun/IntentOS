@@ -1,0 +1,2 @@
+{"type": "session_start", "preset": "workspace_easy_clean", "timestamp": 1782002642.128601}
+{"type": "session_end", "timestamp": 1782002690.766635, "duration_s": 48.6, "turns": 0, "confirmations": 0, "explain_requests": 0, "false_executions": 0, "session_file": "data/sessions/session_workspace_easy_clean_20260620_174402.jsonl"}

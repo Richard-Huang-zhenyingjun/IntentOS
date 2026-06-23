@@ -39,6 +39,8 @@ def interp():
         ("resume", "resume"),
         ("continue", "resume"),
         ("keep going", "resume"),
+        ("leave it", "leave it"),
+        ("leave it for now", "leave it"),
     ],
 )
 def test_control_tokens_detected(interp, text, expected):

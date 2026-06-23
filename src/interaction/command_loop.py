@@ -17,12 +17,21 @@ import time
 import readline  # Enables arrow keys in input() on Mac/Linux
 import select
 import sys
+import logging
+from collections import deque
 from typing import Optional
 
 from src.interaction.confirm_bridge import ConfirmBridge
-from src.interaction.human_presenter import HumanPresenter, SceneDescription
+from src.interaction.human_presenter import (
+    HandoffObject,
+    HandoffState,
+    HumanPresenter,
+    SceneDescription,
+)
 from src.interaction.session_logger import SessionLogger
 from src.intentos.orchestrator import IntentOSState
+
+logger = logging.getLogger(__name__)
 
 
 _CONFIRM_WORDS = {
@@ -51,6 +60,7 @@ _CANCEL_WORDS = {
 }
 _PAUSE_WORDS = {"pause", "wait", "hold on", "hold", "stop for now"}
 _RESUME_WORDS = {"resume", "continue", "go", "keep going", "carry on"}
+_LEAVE_WORDS = {"leave it", "leave it for now", "leave them", "leave them there"}
 _EXEC_STOP_WORDS = {
     "stop",
     "cancel",
@@ -85,6 +95,8 @@ _EXIT_WORDS = {"exit", "quit", "bye", "goodbye", "q"}
 def _classify(text: str) -> str:
     """Classify typed input into a command category."""
     t = text.strip().lower()
+    if t in _LEAVE_WORDS:
+        return "LEAVE"
     if t in _CONFIRM_WORDS:
         return "CONFIRM"
     if t in _CANCEL_WORDS:
@@ -147,6 +159,9 @@ class CommandLoop:
         self._browser_queue = None
         self._interpreter = None
         self._running = False
+        self._deferred_inputs = deque()
+        self._pending_objective_decision: Optional[dict] = None
+        self._active_objective_state: Optional[dict] = None
         self._last_plan: Optional[dict] = None
         self._tick_rate_hz = 10.0
         self._last_reported_complete = False
@@ -176,6 +191,8 @@ class CommandLoop:
         self._reset_planner_moved_objects()
         self._last_reported_complete = False
         self._last_reported_error = False
+        self._pending_objective_decision = None
+        self._active_objective_state = None
         if self._interpreter is not None and hasattr(self._interpreter, "reset_context"):
             self._interpreter.reset_context()
         if self._label_map:
@@ -255,6 +272,8 @@ class CommandLoop:
 
     def _read_terminal_input(self) -> Optional[str]:
         """Poll terminal input briefly so browser commands can be handled live."""
+        if getattr(self, "_deferred_inputs", None):
+            return self._deferred_inputs.popleft()
         try:
             ready, _, _ = select.select([sys.stdin], [], [], 1.0 / self._tick_rate_hz)
         except (OSError, ValueError):
@@ -350,6 +369,8 @@ class CommandLoop:
             return self._handle_pause()
         if cmd == "RESUME":
             return self._handle_resume()
+        if cmd == "LEAVE":
+            return self._handle_leave()
         if cmd == "UNDO":
             return self._handle_undo()
         if cmd == "RETRY":
@@ -473,13 +494,35 @@ class CommandLoop:
 
     def _pursue_until_satisfied(self, max_cycles: Optional[int] = None) -> None:
         """Loop a confirmed table-clear objective until satisfied or exhausted."""
-        abandoned: set[int] = set()
-        placed: set[int] = set()
-        objective_outcomes: dict[int, dict[str, Optional[str]]] = {}
+        state = getattr(self, "_active_objective_state", None)
+        abandoned: set[int] = set(state.get("abandoned", set())) if state else set()
+        placed: set[int] = set(state.get("placed", set())) if state else set()
+        objective_outcomes: dict[int, dict[str, Optional[str]]] = (
+            dict(state.get("outcomes", {})) if state else {}
+        )
         stop_reason: Optional[str] = None
         initial_scene = self._current_live_scene()
         initial_remaining = self._on_table_object_ids(initial_scene)
-        cycle_cap = max_cycles if max_cycles is not None else (2 * len(initial_remaining) + 2)
+        cycle_cap = (
+            max_cycles
+            if max_cycles is not None
+            else (state.get("cycle_cap") if state else None)
+            or (2 * len(initial_remaining) + 2)
+        )
+        current_auth = getattr(self._orch, "_objective_authorization", None)
+        proposal_id = (
+            state.get("proposal_id")
+            if state
+            else getattr(current_auth, "proposal_id", None)
+        )
+        self._active_objective_state = {
+            "abandoned": abandoned,
+            "placed": placed,
+            "outcomes": objective_outcomes,
+            "cycle_cap": cycle_cap,
+            "goal": self._orch.get_status().get("goal", "clean the table"),
+            "proposal_id": proposal_id,
+        }
 
         for _cycle in range(cycle_cap):
             live_scene = self._current_live_scene()
@@ -489,21 +532,50 @@ class CommandLoop:
                 stop_reason = "satisfied"
                 break
 
-            result = self._orch.continue_confirmed_objective(live_scene, abandoned)
+            signal = self._poll_between_cycle_signal()
+            if signal in {"STOP", "LEAVE"}:
+                stop_reason = "user_left_it" if signal == "LEAVE" else "user_stopped"
+                self._orch.revoke_objective_authorization(stop_reason)
+                break
+
+            cycle_stop_requested = {"hit": False}
+
+            def stop_requested() -> bool:
+                if cycle_stop_requested["hit"]:
+                    return True
+                interrupt = self._poll_input_during_execution()
+                if interrupt == "STOP":
+                    cycle_stop_requested["hit"] = True
+                    return True
+                if interrupt == "PAUSE":
+                    cycle_stop_requested["hit"] = True
+                    return True
+                return False
+
+            result = self._orch.continue_confirmed_objective(
+                live_scene,
+                abandoned,
+                stop_requested=stop_requested,
+            )
 
             if not result.accepted:
                 stop_reason = f"refused: {result.reason}"
                 self._orch.revoke_objective_authorization("refused")
                 break
 
+            if cycle_stop_requested["hit"] or result.reason == "user_stopped":
+                stop_reason = "user_stopped"
+                self._orch.revoke_objective_authorization(stop_reason)
+
             cycle_done = 0
             cycle_skipped = 0
             for obj_id, outcome in result.outcomes.items():
                 outcome_status = outcome.get("status")
-                if outcome_status in {"DONE", "SKIPPED", "FAILED"}:
+                if outcome_status in {"DONE", "SKIPPED", "FAILED", "SET_DOWN"}:
                     objective_outcomes[obj_id] = {
                         "status": outcome_status,
                         "reason": outcome.get("reason"),
+                        "destination": outcome.get("destination"),
                     }
                 if outcome_status == "SKIPPED":
                     cycle_skipped += 1
@@ -516,6 +588,9 @@ class CommandLoop:
                     self._sync_monitor_object_done(obj_id)
                     self._bin_count += 1
                     self._session_bin_count += 1
+
+            if stop_reason == "user_stopped":
+                break
 
             if cycle_done == 0 and cycle_skipped == 0:
                 stop_reason = "no_progress"
@@ -532,36 +607,26 @@ class CommandLoop:
         duration_s = time.monotonic() - self._task_start_time
         live_scene = self._current_live_scene()
         table_remaining = len(self._on_table_object_ids(live_scene) - abandoned)
-        scene = SceneDescription(
-            objects=self._preset_objects,
-            arm_position="home",
-            bin_count=self._bin_count,
-            tray_count=self._tray_count,
-            table_count=table_remaining,
+        del duration_s
+        del table_remaining
+        handoff_state = self._build_handoff_state(
+            stop_reason=stop_reason or "unknown",
+            live_scene=live_scene,
+            outcomes=objective_outcomes,
+            abandoned=abandoned,
+            cycles=cycle_cap if stop_reason == "max_cycles" else None,
         )
-        msg = self._presenter.present_completion(
-            goal=self._orch.get_status().get("goal", "clean the table"),
-            nodes_done=self._orch.get_status().get("nodes_complete", 0),
-            duration_s=duration_s,
-            final_scene=scene,
-            task_graph=self._objective_report_graph(objective_outcomes),
-        )
-        if stop_reason == "satisfied" and not abandoned and table_remaining == 0:
-            msg = "Table's clear."
-        if stop_reason and stop_reason.startswith("refused"):
-            msg = f"{msg} I stopped because {stop_reason}."
-        elif stop_reason == "max_cycles":
-            msg = (
-                f"{msg} Table still isn't clear after {cycle_cap} rounds. "
-                "Want me to keep going, or leave it for now?"
-            )
-        elif stop_reason == "no_progress":
-            msg = f"{msg} I stopped because the objective made no progress."
+        msg = self._presenter.present_handoff_summary(handoff_state)
 
         print(f"\n  {msg}", flush=True)
         self._monitor_execution_complete(self._session_bin_count)
         self._monitor_system_response(msg)
         self._finish_objective_execution(stop_reason)
+        if stop_reason == "max_cycles":
+            self._pending_objective_decision = dict(self._active_objective_state)
+        else:
+            self._pending_objective_decision = None
+            self._active_objective_state = None
         self._last_reported_complete = True
 
     def _finish_objective_execution(self, stop_reason: Optional[str]) -> None:
@@ -571,6 +636,58 @@ class CommandLoop:
             return
         completed = stop_reason == "satisfied"
         finish(stop_reason or "unknown", completed=completed)
+
+    def _poll_between_cycle_signal(self) -> Optional[str]:
+        """Poll only safe objective-boundary controls without starting new work."""
+        browser_queue = getattr(self, "_browser_queue", None)
+        if browser_queue:
+            remaining = []
+            hit = None
+            while browser_queue:
+                cmd = (
+                    browser_queue.popleft()
+                    if hasattr(browser_queue, "popleft")
+                    else browser_queue.pop(0)
+                )
+                signal = self._objective_signal_from_text(cmd)
+                if signal in {"STOP", "LEAVE"}:
+                    hit = signal
+                    break
+                remaining.append(cmd)
+            for cmd in reversed(remaining):
+                if hasattr(browser_queue, "appendleft"):
+                    browser_queue.appendleft(cmd)
+                else:
+                    browser_queue.insert(0, cmd)
+            if hit:
+                return hit
+
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        except (OSError, ValueError):
+            return None
+        if not ready:
+            return None
+        line = sys.stdin.readline()
+        if not line:
+            return None
+        signal = self._objective_signal_from_text(line)
+        if signal in {"STOP", "LEAVE"}:
+            return signal
+        if line.strip():
+            self._deferred_inputs.append(line.strip())
+        return None
+
+    @staticmethod
+    def _objective_signal_from_text(text: str) -> Optional[str]:
+        low = (text or "").strip().lower()
+        if low in _EXEC_STOP_WORDS or low in _CANCEL_WORDS:
+            return "STOP"
+        if low in _LEAVE_WORDS:
+            return "LEAVE"
+        if low in _RESUME_WORDS:
+            return "KEEP_GOING"
+        return None
 
     def _current_live_scene(self):
         """Return a live SceneSummary from the Phase 2 scene summarizer."""
@@ -638,11 +755,126 @@ class CommandLoop:
                     "error": outcome.get("reason"),
                     "parameters": {
                         "object_id": object_id,
-                        "target": f"object_{object_id}",
+                        "target": outcome.get("destination") or f"object_{object_id}",
                     },
                 }
             )
         return graph
+
+    def _build_handoff_state(
+        self,
+        stop_reason: str,
+        live_scene,
+        outcomes: dict[int, dict[str, Optional[str]]],
+        abandoned: set[int],
+        cycles: Optional[int] = None,
+    ) -> HandoffState:
+        """
+        Build the one verified handoff state used by every objective exit.
+
+        Buckets are deliberately strict:
+          - placed: DONE outcome and absent from the live table
+          - skipped: abandoned and still present on the live table
+          - remaining: live table object, not attempted, not abandoned
+          - unknown: any contradiction between outcome and live scene
+        """
+        live_table_ids = self._on_table_object_ids(live_scene)
+        outcome_ids = {int(obj_id) for obj_id in outcomes}
+        abandoned_ids = {int(obj_id) for obj_id in abandoned}
+        object_ids = set(live_table_ids) | outcome_ids | abandoned_ids
+        handoff_objects: list[HandoffObject] = []
+        warnings: list[str] = []
+        placed_count = 0
+
+        for object_id in sorted(object_ids):
+            outcome = outcomes.get(object_id, {})
+            outcome_status = str(outcome.get("status") or "").upper()
+            reason = outcome.get("reason")
+            on_table = object_id in live_table_ids
+            attempted = object_id in outcome_ids
+            is_abandoned = object_id in abandoned_ids
+
+            status = "unknown"
+            location = "unknown"
+
+            if outcome_status == "DONE" and not on_table and not is_abandoned:
+                status = "placed"
+                location = self._handoff_done_location(outcome)
+                placed_count += 1
+            elif outcome_status == "SET_DOWN" and on_table and not is_abandoned:
+                status = "remaining"
+                location = "table"
+            elif is_abandoned and on_table:
+                status = "skipped"
+                location = "table"
+            elif on_table and not attempted and not is_abandoned:
+                status = "remaining"
+                location = "table"
+            else:
+                warnings.append(
+                    f"handoff contradiction for object {object_id}: "
+                    f"outcome={outcome_status or 'NONE'} "
+                    f"on_table={on_table} abandoned={is_abandoned}"
+                )
+
+            handoff_objects.append(
+                HandoffObject(
+                    object_id=object_id,
+                    label=self._handoff_label(object_id),
+                    status=status,
+                    location=location,
+                    reason=reason,
+                )
+            )
+
+        actual_removed = len(object_ids - live_table_ids)
+        if placed_count > actual_removed:
+            warning = (
+                f"handoff placed count {placed_count} exceeds actual removed "
+                f"count {actual_removed}"
+            )
+            warnings.append(warning)
+            logger.warning(warning)
+        for warning in warnings:
+            logger.warning(warning)
+
+        if stop_reason == "satisfied":
+            still_live = [
+                obj
+                for obj in handoff_objects
+                if obj.status in {"remaining", "unknown"}
+            ]
+            if still_live:
+                warning = "satisfied handoff has live/unknown objects; downgrading to no_progress"
+                logger.warning(warning)
+                warnings.append(warning)
+                stop_reason = "no_progress"
+
+        return HandoffState(
+            goal=self._orch.get_status().get("goal", "clean the table"),
+            reason=stop_reason,
+            objects=handoff_objects,
+            cycles=cycles,
+            warnings=tuple(warnings),
+        )
+
+    @staticmethod
+    def _handoff_done_location(outcome: dict[str, Optional[str]]) -> str:
+        destination = str(
+            outcome.get("destination")
+            or outcome.get("target")
+            or outcome.get("location")
+            or ""
+        ).lower()
+        if destination in {"bin", "tray"}:
+            return destination
+        return "unknown"
+
+    def _handoff_label(self, object_id: int) -> str:
+        label = getattr(self._presenter, "_id_to_label", {}).get(int(object_id))
+        if label:
+            return "the " + str(label).replace("_", " ")
+        return f"object {object_id}"
 
     def _handle_cancel(self) -> str:
         """Handle no/cancel/stop."""
@@ -658,7 +890,71 @@ class CommandLoop:
 
     def _handle_resume(self) -> str:
         """Handle resume."""
+        if self._pending_objective_decision is not None:
+            result = self._authorize_keep_going()
+            if not result:
+                return "I couldn't extend the authorization. Please try again."
+            self._task_start_time = time.monotonic()
+            self._last_reported_complete = False
+            self._pursue_until_satisfied(
+                max_cycles=self._pending_objective_decision.get("cycle_cap")
+            )
+            return ""
         return "Resuming... (resume not yet wired)"
+
+    def _authorize_keep_going(self) -> bool:
+        """Create a fresh human-sourced authorization for another objective batch."""
+        pending = self._pending_objective_decision
+        if pending is None:
+            return False
+        authorize_for_intentos = getattr(self._world, "authorize_for_intentos", None)
+        extend_objective = getattr(
+            self._orch,
+            "authorize_objective_extension_from_human",
+            None,
+        )
+        if not callable(authorize_for_intentos) or not callable(extend_objective):
+            return False
+        token = authorize_for_intentos(source="keyboard:keep_going", quality=1.0)
+        token_id = getattr(token, "token_id", None)
+        if not token_id:
+            return False
+        goal = pending.get("goal") or self._orch.get_status().get("goal") or "clean the table"
+        extend_objective(
+            phase2_token_id=token_id,
+            source_goal=goal,
+            proposal_id=pending.get("proposal_id"),
+            reason="keep_going",
+        )
+        print(
+            f"[AUTH] Human keep-going authorization issued: phase2_token={token_id}",
+            flush=True,
+        )
+        self._monitor_system_response("Continuing under your keep-going authorization.")
+        return True
+
+    def _handle_leave(self) -> str:
+        """Finalize a max-cycles objective after the user chooses to leave it."""
+        if self._pending_objective_decision is None:
+            return "There's nothing waiting for a leave-it decision right now."
+        state = self._active_objective_state or self._pending_objective_decision
+        try:
+            live_scene = self._current_live_scene()
+            handoff_state = self._build_handoff_state(
+                stop_reason="user_left_it",
+                live_scene=live_scene,
+                outcomes=dict(state.get("outcomes", {})),
+                abandoned=set(state.get("abandoned", set())),
+                cycles=state.get("cycle_cap"),
+            )
+            msg = self._presenter.present_handoff_summary(handoff_state)
+        except Exception:
+            msg = "Okay, leaving it here."
+        self._pending_objective_decision = None
+        self._active_objective_state = None
+        self._finish_objective_execution("user_left_it")
+        self._monitor_system_response(msg)
+        return msg
 
     def _handle_undo(self) -> str:
         """Handle undo request."""

@@ -32,6 +32,28 @@ class SceneDescription:
     table_count: int
 
 
+@dataclass(frozen=True)
+class HandoffObject:
+    """One object in the verified handoff state."""
+
+    object_id: int
+    label: str
+    status: str  # placed | skipped | remaining | unknown
+    location: str = "unknown"  # bin | tray | table | unknown
+    reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HandoffState:
+    """Verified objective state at the moment control returns to the user."""
+
+    goal: str
+    reason: str
+    objects: list[HandoffObject]
+    cycles: Optional[int] = None
+    warnings: tuple[str, ...] = ()
+
+
 class HumanPresenter:
     """
     Translates internal IntentOS state to human-readable strings.
@@ -177,6 +199,114 @@ class HumanPresenter:
 
         time_str = self._format_duration(duration_s)
         return f"Done in {time_str}. {summary.capitalize()}."
+
+    def present_handoff_summary(self, state: HandoffState) -> str:
+        """Honest objective handoff derived from verified object buckets."""
+        if self._debug_mode:
+            return (
+                f"[DEBUG] Handoff reason={state.reason} "
+                f"objects={[(obj.object_id, obj.status, obj.location, obj.reason) for obj in state.objects]}"
+            )
+
+        placed = [obj for obj in state.objects if obj.status == "placed"]
+        skipped = [obj for obj in state.objects if obj.status == "skipped"]
+        remaining = [obj for obj in state.objects if obj.status == "remaining"]
+        unknown = [obj for obj in state.objects if obj.status == "unknown"]
+
+        lines: list[str] = []
+        if state.reason == "satisfied" and not remaining and not skipped and not unknown:
+            if placed:
+                lines.append(f"Table's clear. I placed {len(placed)} item(s).")
+            else:
+                lines.append("Table's clear. There wasn't anything left to move.")
+        elif state.reason == "satisfied":
+            lines.append("Finished the reachable work.")
+        elif state.reason == "max_cycles":
+            lines.append(
+                f"Table still isn't clear after {state.cycles or 0} rounds."
+            )
+        elif state.reason == "user_stopped":
+            lines.append("Stopped safely.")
+        elif state.reason == "user_left_it":
+            lines.append("Okay, leaving it here.")
+        elif state.reason == "no_progress":
+            lines.append("I stopped because the objective made no progress.")
+        elif state.reason.startswith("refused"):
+            lines.append(f"I stopped because {state.reason}.")
+        else:
+            lines.append("Here's where I stopped.")
+
+        state_parts = []
+        if placed:
+            state_parts.append(
+                f"placed {len(placed)} item(s)"
+                + self._location_suffix(placed)
+            )
+        if skipped:
+            state_parts.append(
+                "left "
+                + self._join_readable([obj.label for obj in skipped])
+                + " on the table"
+            )
+        if remaining:
+            state_parts.append(
+                f"{len(remaining)} item(s) still on the table"
+            )
+        if unknown:
+            state_parts.append(
+                "state unclear for "
+                + self._join_readable([obj.label for obj in unknown])
+            )
+        if state_parts and not (
+            state.reason == "satisfied" and not remaining and not skipped and not unknown
+        ):
+            lines.append("Current state: " + "; ".join(state_parts) + ".")
+
+        for obj in skipped:
+            phrase = self._handoff_reason_phrase(obj.reason)
+            lines.append(
+                f"I {phrase} {obj.label} after {MAX_RETRIES_PER_NODE} tries, "
+                "so I left it on the table."
+            )
+        for obj in unknown:
+            lines.append(
+                f"I can't honestly place {obj.label} in a final bucket "
+                "because the execution result and live scene disagree."
+            )
+
+        if remaining or skipped or unknown:
+            if state.reason == "max_cycles":
+                lines.append("Keep going, or leave it?")
+            elif state.reason in {"user_stopped", "user_left_it", "no_progress"} or state.reason.startswith("refused"):
+                lines.append("Say 'clean the table' or 'keep going' to continue.")
+            elif state.reason == "satisfied":
+                lines.append("Say 'clean the table' if you want me to try the remaining item(s).")
+
+        return " ".join(lines)
+
+    @staticmethod
+    def _location_suffix(objects: list[HandoffObject]) -> str:
+        locations = {obj.location for obj in objects}
+        if locations == {"bin"}:
+            return " in the bin"
+        if locations == {"tray"}:
+            return " in the tray"
+        if locations <= {"bin", "tray"}:
+            return " in the bin/tray"
+        return ""
+
+    @staticmethod
+    def _handoff_reason_phrase(reason: Optional[str]) -> str:
+        reason_lower = str(reason or "").lower()
+        if "grasp_failed" in reason_lower or "grasp_no_object" in reason_lower:
+            return "couldn't grip"
+        if "unreachable" in reason_lower or "ik_out_of_limits" in reason_lower:
+            return "couldn't reach"
+        if "move_not_arrived" in reason_lower or "move_invalid_pose" in reason_lower:
+            return "couldn't place"
+        if "timeout" in reason_lower:
+            return "took too long with"
+        return "couldn't move"
 
     def _completion_summary_from_graph(self, task_graph: list[dict]) -> Optional[str]:
         chains = self._object_chains(task_graph)

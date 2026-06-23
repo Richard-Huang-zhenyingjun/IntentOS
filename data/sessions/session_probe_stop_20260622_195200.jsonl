@@ -1,0 +1,2 @@
+{"type": "session_start", "preset": "probe_stop", "timestamp": 1782183120.354188}
+{"type": "session_end", "timestamp": 1782183120.356197, "duration_s": 0.0, "turns": 0, "confirmations": 0, "explain_requests": 0, "false_executions": 0, "session_file": "data/sessions/session_probe_stop_20260622_195200.jsonl"}

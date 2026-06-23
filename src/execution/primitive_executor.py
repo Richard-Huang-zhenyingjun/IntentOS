@@ -65,6 +65,7 @@ class PrimitiveExecutor:
         self._last_move_target_xyz = None
         self._grasp_constraint_id = None
         self._force_grasp_failure = None
+        self._last_safe_stop_release: Optional[dict[str, Any]] = None
         self._world_object_ids: set[int] = set()
         self._object_rest_poses: dict[int, tuple[list[float], list[float]]] = {}
         self._grasp_legacy_fast = False
@@ -476,6 +477,197 @@ class PrimitiveExecutor:
         self.last_error_code = None
 
         print("[EXECUTOR] Plan aborted by user - halted in place, no object dropped")
+
+    def is_holding_object(self) -> bool:
+        """True when the magnet constraint currently holds an object."""
+        return self._grasp_constraint_id is not None and self._last_grasped_object_id is not None
+
+    def safe_release_if_holding(self, timeout_s: float = 20.0) -> bool:
+        """
+        If an object is attached, set it down safely on the table.
+
+        This is used for user-requested mid-task stop. It intentionally reuses
+        safe_pause metadata so the executor's auth gate allows this cleanup
+        sequence without authorizing new task work.
+        """
+        if not self.is_holding_object():
+            return False
+
+        from src.interfaces.primitive import Primitive, PrimitiveType
+
+        object_id = self._last_grasped_object_id
+        self._last_safe_stop_release = None
+        setdown_xy = self._find_safe_table_setdown_xy(object_id)
+        if setdown_xy is None:
+            print("[SAFE_STOP] No clear table set-down spot; falling back to bin release")
+            return self._safe_release_to_bin(timeout_s=timeout_s)
+
+        x, y = setdown_xy
+        table_hover = np.array([x, y, 0.66], dtype=float)
+        table_drop = np.array([x, y, 0.63], dtype=float)
+        plan = [
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=table_hover,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop table hover"},
+            ),
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=table_drop,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop table drop"},
+            ),
+            Primitive(
+                type=PrimitiveType.RELEASE,
+                target_xyz=table_drop,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop release"},
+            ),
+        ]
+        success = self._run_safe_release_plan(plan, timeout_s)
+        if success:
+            self._last_safe_stop_release = {
+                "object_id": object_id,
+                "status": "SET_DOWN",
+                "reason": "user_stopped",
+                "destination": "table",
+            }
+        return success
+
+    def _safe_release_to_bin(self, timeout_s: float = 20.0) -> bool:
+        import numpy as np
+
+        from src.interfaces.primitive import Primitive, PrimitiveType
+
+        object_id = self._last_grasped_object_id
+        bin_hover = np.array([0.4, 0.0, 0.87], dtype=float)
+        bin_drop = np.array([0.4, 0.0, 0.78], dtype=float)
+        plan = [
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=bin_hover,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop fallback bin hover"},
+            ),
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=bin_drop,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop fallback bin drop"},
+            ),
+            Primitive(
+                type=PrimitiveType.RELEASE,
+                target_xyz=bin_drop,
+                object_id=object_id,
+                metadata={"description": "safe_pause: user stop fallback release"},
+            ),
+        ]
+        success = self._run_safe_release_plan(plan, timeout_s)
+        if success:
+            self._last_safe_stop_release = {
+                "object_id": object_id,
+                "status": "DONE",
+                "reason": "user_stopped_safe_fallback",
+                "destination": "bin",
+            }
+        return success
+
+    def get_last_safe_stop_release(self) -> Optional[dict[str, Any]]:
+        """Return the most recent user-stop release side effect, if any."""
+        return dict(self._last_safe_stop_release) if self._last_safe_stop_release else None
+
+    def _run_safe_release_plan(self, plan: List[Primitive], timeout_s: float) -> bool:
+        import time
+
+        self.start_plan(plan)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            world = self._build_world_state_for_safe_release()
+            status = self.tick(world)
+            if status in (ExecutorStatus.IDLE, ExecutorStatus.COMPLETE):
+                return True
+            if status == ExecutorStatus.FAILED:
+                return False
+            sim = getattr(self.controller, "sim", None)
+            if sim is not None and hasattr(sim, "step"):
+                sim.step()
+                self.pin_non_active_objects()
+            time.sleep(0.02)
+        self.last_error_code = "safe_release_timeout"
+        return False
+
+    def _find_safe_table_setdown_xy(self, active_object_id: Optional[int]) -> Optional[tuple[float, float]]:
+        """Find a deterministic clear table spot for user-stop set-down."""
+        x_min, x_max, y_min, y_max = (-0.35, 0.35, -0.25, 0.25)
+        margin = 0.04
+        min_clearance = 0.10
+        candidates: list[tuple[float, float]] = []
+
+        try:
+            import pybullet as p
+
+            client = self._physics_client()
+            if active_object_id is not None:
+                pos, _orn = p.getBasePositionAndOrientation(
+                    active_object_id,
+                    physicsClientId=client,
+                )
+                candidates.append((float(pos[0]), float(pos[1])))
+        except Exception:
+            client = self._physics_client()
+
+        candidates.extend(
+            [
+                (0.20, -0.15),
+                (0.00, -0.18),
+                (-0.20, -0.15),
+                (0.25, 0.15),
+                (-0.25, 0.15),
+                (0.00, 0.00),
+            ]
+        )
+
+        occupied: list[tuple[float, float]] = []
+        try:
+            import pybullet as p
+
+            for obj_id in self._world_object_ids:
+                if active_object_id is not None and int(obj_id) == int(active_object_id):
+                    continue
+                pos, _orn = p.getBasePositionAndOrientation(
+                    obj_id,
+                    physicsClientId=client,
+                )
+                x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+                if x_min - margin <= x <= x_max + margin and y_min - margin <= y <= y_max + margin and 0.50 <= z <= 0.80:
+                    occupied.append((x, y))
+        except Exception:
+            return None
+
+        seen = set()
+        for x, y in candidates:
+            key = (round(x, 3), round(y, 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            if not (x_min + margin <= x <= x_max - margin and y_min + margin <= y <= y_max - margin):
+                continue
+            if all(((x - ox) ** 2 + (y - oy) ** 2) ** 0.5 >= min_clearance for ox, oy in occupied):
+                return (x, y)
+        return None
+
+    def _build_world_state_for_safe_release(self) -> WorldState:
+        sim = getattr(self.controller, "sim", None)
+        arm = sim.get_arm_state() if sim is not None and hasattr(sim, "get_arm_state") else None
+        obj = sim.get_object_state() if sim is not None and hasattr(sim, "get_object_state") else None
+        return WorldState(
+            arm=arm,
+            object=obj,
+            target_id=self._last_grasped_object_id,
+            holding=self.is_holding_object(),
+            attached_id=self._last_grasped_object_id,
+        )
 
     def _reset_grasp_state(self):
         self._grasp_stage = None

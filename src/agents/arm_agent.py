@@ -195,6 +195,34 @@ class ArmAgent(AgentBase):
             except Exception:
                 pass
 
+    def safe_release_if_holding(self, timeout_s: float = 20.0) -> bool:
+        """Delegate user-stop safe release to the primitive executor."""
+        release = getattr(self._executor, "safe_release_if_holding", None)
+        if not callable(release):
+            return False
+        return bool(release(timeout_s=timeout_s))
+
+    def get_last_safe_stop_release(self):
+        """Expose the executor's latest user-stop release side effect."""
+        getter = getattr(self._executor, "get_last_safe_stop_release", None)
+        if not callable(getter):
+            return None
+        return getter()
+
+    def abort_for_user_stop(self) -> bool:
+        """
+        Halt the current primitive for a user stop request.
+
+        The primitive executor preserves any active magnet constraint, so a
+        follow-up safe_release_if_holding() can set the carried object down
+        instead of dropping it.
+        """
+        abort = getattr(self._executor, "abort", None)
+        if not callable(abort):
+            return False
+        abort()
+        return True
+
     def _dispatch_to_executor(
         self,
         action: AgentAction,
