@@ -44,6 +44,16 @@ class HandoffObject:
 
 
 @dataclass(frozen=True)
+class DecisionReason:
+    """A real state/code reason that can be rendered for the user."""
+
+    kind: str
+    code: Optional[str] = None
+    detail: Optional[str] = None
+    object_label: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class HandoffState:
     """Verified objective state at the moment control returns to the user."""
 
@@ -230,11 +240,25 @@ class HumanPresenter:
         elif state.reason == "user_left_it":
             lines.append("Okay, leaving it here.")
         elif state.reason == "no_progress":
-            lines.append("I stopped because the objective made no progress.")
+            lines.append(
+                self.present_reason(DecisionReason(kind="no_progress"))
+            )
         elif state.reason.startswith("refused"):
-            lines.append(f"I stopped because {state.reason}.")
+            lines.append(
+                self.present_reason(
+                    DecisionReason(
+                        kind="refusal",
+                        code=state.reason,
+                        detail=state.reason.removeprefix("refused:").strip(),
+                    )
+                )
+            )
         else:
-            lines.append("Here's where I stopped.")
+            lines.append(
+                self.present_reason(
+                    DecisionReason(kind="unknown", code=state.reason)
+                )
+            )
 
         state_parts = []
         if placed:
@@ -263,10 +287,32 @@ class HumanPresenter:
             lines.append("Current state: " + "; ".join(state_parts) + ".")
 
         for obj in skipped:
-            phrase = self._handoff_reason_phrase(obj.reason)
+            phrase = self.present_reason(
+                DecisionReason(
+                    kind="object",
+                    code=obj.reason,
+                    object_label=obj.label,
+                ),
+                form="phrase",
+            )
             lines.append(
                 f"I {phrase} {obj.label} after {MAX_RETRIES_PER_NODE} tries, "
                 "so I left it on the table."
+            )
+        set_down = [
+            obj
+            for obj in remaining
+            if str(obj.reason or "").lower() in {"user_stopped", "user_stopped_set_down"}
+        ]
+        if set_down:
+            lines.append(
+                self.present_reason(
+                    DecisionReason(
+                        kind="stop",
+                        code="user_stopped_set_down",
+                        object_label=self._join_readable([obj.label for obj in set_down]),
+                    )
+                )
             )
         for obj in unknown:
             lines.append(
@@ -297,7 +343,74 @@ class HumanPresenter:
 
     @staticmethod
     def _handoff_reason_phrase(reason: Optional[str]) -> str:
-        reason_lower = str(reason or "").lower()
+        return HumanPresenter().present_reason(
+            DecisionReason(kind="object", code=reason),
+            form="phrase",
+        )
+
+    def present_reason(
+        self,
+        reason: DecisionReason | str | None,
+        form: str = "sentence",
+    ) -> str:
+        """
+        Render one real decision reason.
+
+        This deliberately keeps recoverable mechanics in a soft register and
+        safety/authorization failures in a serious register. Unknown codes are
+        not guessed.
+        """
+        if not isinstance(reason, DecisionReason):
+            reason = DecisionReason(kind="unknown", code=str(reason or ""))
+
+        code = str(reason.code or "").strip()
+        detail = str(reason.detail or "").strip()
+        normalized = " ".join(part for part in (code, detail) if part).lower()
+
+        if self._is_safety_or_auth_reason(normalized, reason.kind):
+            serious = "an authorization or safety check failed"
+            if form == "phrase":
+                return serious
+            cleaned = self._clean_reason_detail(detail or code)
+            if cleaned:
+                return f"I stopped because {serious}: {cleaned}."
+            return f"I stopped because {serious}."
+
+        if reason.kind == "refusal" or code.startswith("refused"):
+            fact = self._clean_reason_detail(detail or code.removeprefix("refused:").strip())
+            if not fact:
+                return "I stopped because the next step was outside the confirmed objective."
+            return (
+                "I stopped because the next step was outside the confirmed "
+                f"objective: {fact}."
+            )
+
+        if reason.kind == "no_progress":
+            return (
+                "I stopped because this round did not place or skip any items."
+            )
+
+        if reason.kind == "stop":
+            if reason.code == "user_stopped_set_down" and reason.object_label:
+                return (
+                    f"You asked me to stop, so I set {reason.object_label} "
+                    "down on the table."
+                )
+            return "You asked me to stop, so I stopped safely."
+
+        phrase = self._recoverable_phrase(normalized)
+        if phrase is not None:
+            return phrase if form == "phrase" else f"I {phrase}."
+
+        raw = self._clean_reason_detail(detail or code)
+        if form == "phrase":
+            return "couldn't determine a specific reason"
+        if raw:
+            return f"I stopped, but couldn't determine a specific reason. Detail: {raw}."
+        return "I stopped, but couldn't determine a specific reason."
+
+    @staticmethod
+    def _recoverable_phrase(reason_lower: str) -> Optional[str]:
         if "grasp_failed" in reason_lower or "grasp_no_object" in reason_lower:
             return "couldn't grip"
         if "unreachable" in reason_lower or "ik_out_of_limits" in reason_lower:
@@ -306,7 +419,46 @@ class HumanPresenter:
             return "couldn't place"
         if "timeout" in reason_lower:
             return "took too long with"
-        return "couldn't move"
+        if any(
+            code in reason_lower
+            for code in {"object_moved", "object_occluded", "object_invisible"}
+        ):
+            return "couldn't move"
+        return None
+
+    @staticmethod
+    def _is_safety_or_auth_reason(reason_lower: str, kind: str = "") -> bool:
+        if kind in {"safety", "authorization", "auth", "unauthorized"}:
+            return True
+        serious_keywords = {
+            "unauthorized",
+            "authorization",
+            "auth",
+            "scoped token",
+            "no valid scoped token",
+            "safety",
+            "collision",
+            "hardware",
+            "emergency",
+        }
+        return any(keyword in reason_lower for keyword in serious_keywords)
+
+    @staticmethod
+    def _clean_reason_detail(detail: str) -> str:
+        cleaned = str(detail or "").strip()
+        if not cleaned:
+            return ""
+        cleaned = cleaned.removeprefix("refused:").strip()
+        replacements = {
+            "not a live table object": "not currently on the table",
+            "live table object": "object currently on the table",
+            "objective scope": "confirmed objective",
+            "Phase 2": "authorization",
+        }
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned[0].lower() + cleaned[1:] if cleaned else cleaned
 
     def _completion_summary_from_graph(self, task_graph: list[dict]) -> Optional[str]:
         chains = self._object_chains(task_graph)

@@ -2,7 +2,7 @@ from collections import deque
 from types import SimpleNamespace
 
 from src.interaction.command_loop import CommandLoop
-from src.interaction.human_presenter import HumanPresenter
+from src.interaction.human_presenter import DecisionReason, HumanPresenter
 from src.intentos.orchestrator import ObjectiveContinuationResult
 
 
@@ -284,7 +284,7 @@ def test_persistence_loop_revokes_when_cycle_makes_no_progress(capsys):
     assert orch.completed == []
     assert orch.revoked == ["no_progress"]
     assert loop._session_bin_count == 0
-    assert "made no progress" in capsys.readouterr().out
+    assert "did not place or skip any items" in capsys.readouterr().out
 
 
 def test_persistence_loop_reports_table_clear_when_nothing_remains(capsys):
@@ -489,3 +489,55 @@ def test_handoff_treats_user_stop_set_down_as_remaining_without_warning():
     assert "Current state: 1 item(s) still on the table." in response
     assert "state unclear" not in response
     assert "placed 1 item" not in response
+
+
+def test_present_reason_recoverable_skip_uses_soft_register():
+    presenter = HumanPresenter()
+
+    text = presenter.present_reason(
+        DecisionReason(kind="object", code="grasp_failed", object_label="the red block"),
+        form="phrase",
+    )
+
+    assert text == "couldn't grip"
+
+
+def test_present_reason_safety_auth_uses_distinct_serious_register():
+    presenter = HumanPresenter()
+
+    text = presenter.present_reason(
+        DecisionReason(kind="authorization", code="unauthorized_execution_blocked")
+    )
+
+    assert "authorization or safety check failed" in text
+    assert "couldn't grip" not in text
+    assert "couldn't reach" not in text
+    assert "couldn't place" not in text
+
+
+def test_present_reason_refusal_keeps_real_fact_in_user_shaped_wording():
+    presenter = HumanPresenter()
+
+    text = presenter.present_reason(
+        DecisionReason(
+            kind="refusal",
+            code="refused",
+            detail="object 17 is not a live table object",
+        )
+    )
+
+    assert "outside the confirmed objective" in text
+    assert "object 17 is not currently on the table" in text
+
+
+def test_present_reason_unknown_code_does_not_invent_cause():
+    presenter = HumanPresenter()
+
+    text = presenter.present_reason(
+        DecisionReason(kind="object", code="mystery_failure_42")
+    )
+
+    assert "couldn't determine a specific reason" in text
+    assert "couldn't grip" not in text
+    assert "couldn't reach" not in text
+    assert "couldn't place" not in text
