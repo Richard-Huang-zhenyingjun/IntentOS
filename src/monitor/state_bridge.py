@@ -230,7 +230,12 @@ class StateBridge:
         push_state_update()
 
     def on_execution_complete(self, bin_count: int) -> None:
-        """Call when execution finishes."""
+        """Call when execution finishes.
+
+        StateBridge updates monitor state only. CommandLoop/HumanPresenter owns
+        the user-facing handoff summary, so this must not emit a second closing
+        conversation line such as "Table is clear."
+        """
         for obj in self._objects:
             obj["highlighted"] = False
         ws = self._build_workspace_dict()
@@ -241,13 +246,6 @@ class StateBridge:
         patch = {"workspace": ws}
         workspace_state.update(patch)
         self._post("/state", patch)
-        table_remaining = max(0, len(self._objects) - self._bin_count - self._tray_count)
-        msg = (
-            f"Done. {table_remaining} item(s) still on table."
-            if table_remaining > 0
-            else "Table is clear."
-        )
-        self._add_system_turn(msg)
         push_state_update()
 
     @staticmethod

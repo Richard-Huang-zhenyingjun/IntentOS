@@ -138,6 +138,33 @@ class _AllDoneOrchestrator(_TerminalOrchestrator):
         )
 
 
+class _OneDoneOneRemainingOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        live_ids = {obj.object_id for obj in live_scene.objects_on_table}
+        self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
+        self.remaining.discard(4)
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                4: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
+class _FalseDoneOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        live_ids = {obj.object_id for obj in live_scene.objects_on_table}
+        self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                4: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
 class _MaxCycleOrchestrator(_TerminalOrchestrator):
     def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
         self.continue_calls.append(
@@ -313,6 +340,39 @@ def test_persistence_loop_full_clear_reports_real_placed_count(capsys):
     assert "Table's clear. I placed 2 item(s)." in out
     assert "still on the table" not in out
     assert "Say 'clean the table'" not in out
+
+
+def test_object_boundary_progress_reports_real_count_and_next_label(capsys):
+    orch = _OneDoneOneRemainingOrchestrator({4, 5})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=1)
+
+    out = capsys.readouterr().out
+    assert "Placed the red block (1 of 2)." in out
+    assert "Working on the blue block next." in out
+
+
+def test_object_boundary_progress_does_not_overclaim_when_done_still_live(capsys):
+    orch = _FalseDoneOrchestrator({4, 5})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=1)
+
+    out = capsys.readouterr().out
+    assert "Placed the red block" not in out
+    assert "Working on the blue block next" not in out
+
+
+def test_object_boundary_progress_not_emitted_for_final_object(capsys):
+    orch = _AllDoneOrchestrator({4})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=2)
+
+    out = capsys.readouterr().out
+    assert "Working on" not in out
+    assert "Table's clear." in out
 
 
 def test_tick_until_stable_pins_scene_and_does_not_tick_while_awaiting_confirm():

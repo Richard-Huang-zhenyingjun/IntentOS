@@ -569,6 +569,7 @@ class CommandLoop:
 
             cycle_done = 0
             cycle_skipped = 0
+            progress_messages: list[str] = []
             for obj_id, outcome in result.outcomes.items():
                 outcome_status = outcome.get("status")
                 if outcome_status in {"DONE", "SKIPPED", "FAILED", "SET_DOWN"}:
@@ -588,6 +589,18 @@ class CommandLoop:
                     self._sync_monitor_object_done(obj_id)
                     self._bin_count += 1
                     self._session_bin_count += 1
+                    message = self._build_object_boundary_progress_message(
+                        object_id=obj_id,
+                        placed=placed,
+                        abandoned=abandoned,
+                    )
+                    if message:
+                        progress_messages.append(message)
+
+            if progress_messages:
+                for message in progress_messages:
+                    print(f"\n  {message}", flush=True)
+                    self._monitor_system_response(message)
 
             if stop_reason == "user_stopped":
                 break
@@ -739,6 +752,34 @@ class CommandLoop:
                 "object_id": object_id,
                 "target": destination,
             },
+        )
+
+    def _build_object_boundary_progress_message(
+        self,
+        object_id: int,
+        placed: set[int],
+        abandoned: set[int],
+    ) -> Optional[str]:
+        """Progress at safe object boundaries, derived from live scene."""
+        live_scene = self._current_live_scene()
+        live_table_ids = self._on_table_object_ids(live_scene)
+        if object_id in live_table_ids:
+            return None
+
+        remaining = sorted(live_table_ids - abandoned)
+        if not remaining:
+            return None
+
+        placed_count = len(placed)
+        total = placed_count + len(remaining) + len(abandoned)
+        if total <= 0 or placed_count > total:
+            return None
+
+        label = self._handoff_label(object_id)
+        next_label = self._handoff_label(remaining[0])
+        return (
+            f"Placed {label} ({placed_count} of {total}). "
+            f"Working on {next_label} next."
         )
 
     @staticmethod
