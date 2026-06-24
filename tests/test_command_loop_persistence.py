@@ -9,6 +9,7 @@ from src.intentos.orchestrator import ObjectiveContinuationResult
 class _Orchestrator:
     def __init__(self, remaining):
         self.remaining = remaining
+        self.binned = set()
         self.continue_calls = []
         self.completed = []
         self.revoked = []
@@ -128,6 +129,7 @@ class _AllDoneOrchestrator(_TerminalOrchestrator):
         self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
         for object_id in live_ids:
             self.remaining.discard(object_id)
+            self.binned.add(object_id)
         return ObjectiveContinuationResult(
             accepted=True,
             reason="complete",
@@ -143,11 +145,96 @@ class _OneDoneOneRemainingOrchestrator(_TerminalOrchestrator):
         live_ids = {obj.object_id for obj in live_scene.objects_on_table}
         self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
         self.remaining.discard(4)
+        self.binned.add(4)
         return ObjectiveContinuationResult(
             accepted=True,
             reason="complete",
             outcomes={
                 4: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
+class _PrimitiveProgressOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        live_ids = {obj.object_id for obj in live_scene.objects_on_table}
+        self.continue_calls.append({"live": live_ids, "abandoned": set(abandoned)})
+        progress = kwargs.get("progress_callback")
+        assert callable(progress)
+        for action in ("reach", "grasp", "move"):
+            progress(
+                SimpleNamespace(
+                    action_type=action,
+                    parameters={"object_id": 4, "target": "bin"},
+                ),
+                SimpleNamespace(success=True),
+                None,
+            )
+        self.remaining.discard(4)
+        self.binned.add(4)
+        progress(
+            SimpleNamespace(
+                action_type="release",
+                parameters={"object_id": 4, "target": "bin"},
+            ),
+            SimpleNamespace(success=True),
+            None,
+        )
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                4: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
+class _PrimitiveFalseDoneProgressOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        progress = kwargs.get("progress_callback")
+        assert callable(progress)
+        progress(
+            SimpleNamespace(
+                action_type="release",
+                parameters={"object_id": 4, "target": "bin"},
+            ),
+            SimpleNamespace(success=True),
+            None,
+        )
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                4: {"status": "DONE", "reason": None, "destination": "bin"},
+            },
+        )
+
+
+class _PrimitiveFailureProgressOrchestrator(_TerminalOrchestrator):
+    def continue_confirmed_objective(self, live_scene, abandoned, **kwargs):
+        progress = kwargs.get("progress_callback")
+        assert callable(progress)
+        progress(
+            SimpleNamespace(
+                action_type="reach",
+                parameters={"object_id": 4, "target": "bin"},
+            ),
+            SimpleNamespace(success=True),
+            None,
+        )
+        progress(
+            SimpleNamespace(
+                action_type="grasp",
+                parameters={"object_id": 4, "target": "bin"},
+            ),
+            SimpleNamespace(success=False, failure_reason="grasp_failed"),
+            None,
+        )
+        return ObjectiveContinuationResult(
+            accepted=True,
+            reason="complete",
+            outcomes={
+                4: {"status": "SKIPPED", "reason": "grasp_failed", "destination": "bin"},
             },
         )
 
@@ -174,6 +261,7 @@ class _MaxCycleOrchestrator(_TerminalOrchestrator):
             }
         )
         self.remaining.discard(5)
+        self.binned.add(5)
         return ObjectiveContinuationResult(
             accepted=True,
             reason="complete",
@@ -195,6 +283,7 @@ class _MidCycleStopOrchestrator(_TerminalOrchestrator):
         assert callable(stop_requested)
         assert stop_requested() is True
         self.remaining.discard(4)
+        self.binned.add(4)
         return ObjectiveContinuationResult(
             accepted=True,
             reason="user_stopped",
@@ -243,12 +332,25 @@ class _Bridge:
         }
 
 
-def _scene(object_ids):
+def _scene(object_ids, binned_ids=None):
+    binned_ids = set(binned_ids or set())
     objects = tuple(
-        SimpleNamespace(object_id=object_id)
+        SimpleNamespace(
+            object_id=object_id,
+            pos_xyz=(0.4, 0.0, 0.75) if object_id in binned_ids else (0.0, 0.0, 0.63),
+        )
+        for object_id in sorted(set(object_ids) | binned_ids)
+    )
+    objects_on_table = tuple(
+        SimpleNamespace(object_id=object_id, pos_xyz=(0.0, 0.0, 0.63))
         for object_id in sorted(object_ids)
     )
-    return SimpleNamespace(objects_on_table=objects)
+    return SimpleNamespace(
+        objects=objects,
+        objects_on_table=objects_on_table,
+        bin_zone_center=(0.4, 0.0, 0.75),
+        bin_zone_radius=0.04,
+    )
 
 
 def _loop_with(orch):
@@ -270,7 +372,7 @@ def _loop_with(orch):
     loop._monitor_execution_complete = lambda count: None
     loop._monitor_system_response = lambda msg: None
     loop._mark_planner_object_moved = lambda object_id: None
-    loop._current_live_scene = lambda: _scene(orch.remaining)
+    loop._current_live_scene = lambda: _scene(orch.remaining, getattr(orch, "binned", set()))
     loop._bridge_monitor = _Bridge()
     return loop
 
@@ -343,18 +445,20 @@ def test_persistence_loop_full_clear_reports_real_placed_count(capsys):
 
 
 def test_object_boundary_progress_reports_real_count_and_next_label(capsys):
-    orch = _OneDoneOneRemainingOrchestrator({4, 5})
+    orch = _PrimitiveProgressOrchestrator({4, 5})
     loop = _loop_with(orch)
 
     loop._pursue_until_satisfied(max_cycles=1)
 
     out = capsys.readouterr().out
-    assert "Placed the red block (1 of 2)." in out
-    assert "Working on the blue block next." in out
+    assert "Reached the red block. Picking it up next." in out
+    assert "Picked up the red block. Moving it to the bin." in out
+    assert "Moved the red block over the bin. Releasing it now." in out
+    assert "✓ Placed the red block in the bin (1 of 2)." in out
 
 
 def test_object_boundary_progress_does_not_overclaim_when_done_still_live(capsys):
-    orch = _FalseDoneOrchestrator({4, 5})
+    orch = _PrimitiveFalseDoneProgressOrchestrator({4, 5})
     loop = _loop_with(orch)
 
     loop._pursue_until_satisfied(max_cycles=1)
@@ -364,15 +468,41 @@ def test_object_boundary_progress_does_not_overclaim_when_done_still_live(capsys
     assert "Working on the blue block next" not in out
 
 
+def test_release_progress_requires_object_in_bin(capsys):
+    orch = _PrimitiveProgressOrchestrator({4, 5})
+    loop = _loop_with(orch)
+    loop._current_live_scene = lambda: _scene({4, 5}, binned_ids=set())
+
+    loop._pursue_until_satisfied(max_cycles=1)
+
+    out = capsys.readouterr().out
+    assert "✓ Placed the red block in the bin" not in out
+    assert "I can't honestly place the red block in a final bucket" in out
+
+
 def test_object_boundary_progress_not_emitted_for_final_object(capsys):
-    orch = _AllDoneOrchestrator({4})
+    orch = _PrimitiveProgressOrchestrator({4})
     loop = _loop_with(orch)
 
     loop._pursue_until_satisfied(max_cycles=2)
 
     out = capsys.readouterr().out
+    assert "Placed the red block" not in out
     assert "Working on" not in out
     assert "Table's clear." in out
+
+
+def test_primitive_failure_does_not_emit_false_success_line(capsys):
+    orch = _PrimitiveFailureProgressOrchestrator({4})
+    loop = _loop_with(orch)
+
+    loop._pursue_until_satisfied(max_cycles=1)
+
+    out = capsys.readouterr().out
+    assert "Reached the red block. Picking it up next." in out
+    assert "Picked up the red block" not in out
+    assert "Moving it to the bin" not in out
+    assert "I couldn't grip the red block after 5 tries" in out
 
 
 def test_tick_until_stable_pins_scene_and_does_not_tick_while_awaiting_confirm():

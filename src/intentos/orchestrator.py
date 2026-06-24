@@ -131,6 +131,7 @@ class IntentOSOrchestrator:
         self._current_segment_idx: int = 0
         self._current_token: Optional[ScopedExecutionToken] = None
         self._stop_requested_callback: Optional[Any] = None
+        self._progress_callback: Optional[Any] = None
         self._last_continuation_stop_reason: Optional[str] = None
         self._last_safe_stop_outcomes: dict[int, dict[str, Optional[str]]] = {}
         self._objective_authorization: Optional[ObjectiveAuthorization] = None
@@ -243,6 +244,7 @@ class IntentOSOrchestrator:
         abandoned_object_ids: set[int],
         timeout_s: float = 60.0,
         stop_requested: Any = None,
+        progress_callback: Any = None,
     ) -> ObjectiveContinuationResult:
         """
         Continue a confirmed objective using a fresh graph and scoped token.
@@ -305,6 +307,7 @@ class IntentOSOrchestrator:
 
         self._state = IntentOSState.EXECUTING
         self._stop_requested_callback = stop_requested
+        self._progress_callback = progress_callback
         self._last_continuation_stop_reason = None
         self._last_safe_stop_outcomes = {}
         deadline = time.monotonic() + timeout_s
@@ -313,6 +316,7 @@ class IntentOSOrchestrator:
                 self.tick()
         finally:
             self._stop_requested_callback = None
+            self._progress_callback = None
 
         if self._state == IntentOSState.EXECUTING:
             return ObjectiveContinuationResult(
@@ -569,6 +573,7 @@ class IntentOSOrchestrator:
             token=self._current_token,
             graph=graph,
             stop_requested=getattr(self, "_stop_requested_callback", None),
+            progress_callback=getattr(self, "_progress_callback", None),
         )
         dispatch_result.segment_id = segment.segment_id
 

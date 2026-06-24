@@ -73,6 +73,7 @@ class AgentCoordinator:
         token: Any,
         graph: TaskGraph,
         stop_requested: Any = None,
+        progress_callback: Any = None,
     ) -> DispatchResult:
         """
         Execute all nodes in a segment, respecting resource and timing constraints.
@@ -169,6 +170,11 @@ class AgentCoordinator:
                         self._invalidate_downstream_in_segment(segment_nodes, node_id)
                         segment_failed = True
                     active_agents.discard(node.agent_id)
+                    if callable(progress_callback):
+                        try:
+                            progress_callback(node, result, graph)
+                        except Exception:
+                            logger.exception("Progress callback failed for node %s", node_id)
                 self._release_resources(node_id)
                 last_progress = time.monotonic()
 

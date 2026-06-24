@@ -552,10 +552,23 @@ class CommandLoop:
                     return True
                 return False
 
+            def progress_callback(node, result, graph) -> None:
+                message = self._build_primitive_boundary_progress_message(
+                    node=node,
+                    result=result,
+                    placed=placed,
+                    abandoned=abandoned,
+                )
+                if not message:
+                    return
+                print(f"\n  {message}", flush=True)
+                self._monitor_system_response(message)
+
             result = self._orch.continue_confirmed_objective(
                 live_scene,
                 abandoned,
                 stop_requested=stop_requested,
+                progress_callback=progress_callback,
             )
 
             if not result.accepted:
@@ -569,7 +582,6 @@ class CommandLoop:
 
             cycle_done = 0
             cycle_skipped = 0
-            progress_messages: list[str] = []
             for obj_id, outcome in result.outcomes.items():
                 outcome_status = outcome.get("status")
                 if outcome_status in {"DONE", "SKIPPED", "FAILED", "SET_DOWN"}:
@@ -589,18 +601,6 @@ class CommandLoop:
                     self._sync_monitor_object_done(obj_id)
                     self._bin_count += 1
                     self._session_bin_count += 1
-                    message = self._build_object_boundary_progress_message(
-                        object_id=obj_id,
-                        placed=placed,
-                        abandoned=abandoned,
-                    )
-                    if message:
-                        progress_messages.append(message)
-
-            if progress_messages:
-                for message in progress_messages:
-                    print(f"\n  {message}", flush=True)
-                    self._monitor_system_response(message)
 
             if stop_reason == "user_stopped":
                 break
@@ -754,33 +754,74 @@ class CommandLoop:
             },
         )
 
-    def _build_object_boundary_progress_message(
+    def _build_primitive_boundary_progress_message(
         self,
-        object_id: int,
+        node,
+        result,
         placed: set[int],
         abandoned: set[int],
     ) -> Optional[str]:
-        """Progress at safe object boundaries, derived from live scene."""
+        """Progress at primitive boundaries, derived from completed node state."""
+        if not getattr(result, "success", False):
+            return None
+
+        action_type = str(getattr(node, "action_type", "") or "")
+        params = getattr(node, "parameters", None) or {}
+        object_id = params.get("object_id")
+        if object_id is None:
+            return None
+        object_id = int(object_id)
+
+        label = self._handoff_label(int(object_id))
+        destination = str(params.get("target") or "bin")
+
+        if action_type == "reach":
+            return f"Reached {label}. Picking it up next."
+        if action_type == "grasp":
+            return f"Picked up {label}. Moving it to the {destination}."
+        if action_type == "move":
+            return f"Moved {label} over the {destination}. Releasing it now."
+        if action_type != "release":
+            return None
+
         live_scene = self._current_live_scene()
         live_table_ids = self._on_table_object_ids(live_scene)
         if object_id in live_table_ids:
+            return None
+        if destination == "bin" and not self._object_in_bin(live_scene, object_id):
             return None
 
         remaining = sorted(live_table_ids - abandoned)
         if not remaining:
             return None
 
-        placed_count = len(placed)
+        placed_count = len(placed) + (0 if object_id in placed else 1)
         total = placed_count + len(remaining) + len(abandoned)
         if total <= 0 or placed_count > total:
             return None
 
-        label = self._handoff_label(object_id)
-        next_label = self._handoff_label(remaining[0])
-        return (
-            f"Placed {label} ({placed_count} of {total}). "
-            f"Working on {next_label} next."
-        )
+        return f"✓ Placed {label} in the {destination} ({placed_count} of {total})."
+
+    @staticmethod
+    def _object_in_bin(live_scene, object_id: int) -> bool:
+        center = getattr(live_scene, "bin_zone_center", None)
+        radius = float(getattr(live_scene, "bin_zone_radius", 0.0) or 0.0)
+        if center is None or radius <= 0.0:
+            return False
+        try:
+            cx, cy = float(center[0]), float(center[1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        for obj in getattr(live_scene, "objects", ()) or ():
+            if getattr(obj, "object_id", None) != object_id:
+                continue
+            pos = getattr(obj, "pos_xyz", None)
+            if pos is None or len(pos) < 2:
+                return False
+            dx = float(pos[0]) - cx
+            dy = float(pos[1]) - cy
+            return (dx * dx + dy * dy) ** 0.5 <= radius
+        return False
 
     @staticmethod
     def _objective_report_graph(
