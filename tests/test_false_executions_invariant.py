@@ -2,6 +2,7 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from src.core.schema import ArmUIState
@@ -93,5 +94,68 @@ def test_no_execution_without_token():
         world = orch._read_world_state()
         with pytest.raises(AssertionError, match="INVARIANT VIOLATED"):
             orch._execute_task_with_trust(world)
+    finally:
+        orch.close()
+
+
+def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
+    """Revoking authorization after GRASP but before RELEASE must not leave
+    the arm holding an object in an unauthorized position, and must not
+    record a false execution.
+
+    Note: there is no separate user-CANCEL-during-EXECUTING input path wired
+    in this orchestrator today - the state dispatcher only handles CANCEL
+    while state == 'confirming' (src/core/orchestrator.py _update_state_machine).
+    The system's actual mechanism for a mid-execution revoke is the
+    trust-drop reauth trigger (_trigger_reauth): it invalidates the token and
+    arms SafePauseHelper's deposit-then-home sequence. This test drives that
+    real mechanism directly rather than inventing a new one.
+    """
+    config = _base_config(tmp_path)
+    orch = build_system(config)
+    try:
+        _install_scheduled_input(orch, config)
+
+        max_false_executions = 0
+        grasped = False
+        for _ in range(300):
+            snapshot = orch.step()
+            max_false_executions = max(max_false_executions, snapshot.false_executions)
+            if orch.grasp.is_holding():
+                grasped = True
+                break
+
+        assert grasped, "Test setup failed: never reached a grasped state"
+        assert orch.state_machine.state == ArmUIState.EXECUTING
+        assert orch.auth_manager.is_authorized()
+
+        # Revoke authorization mid-execution: after GRASP, before RELEASE.
+        orch._trigger_reauth("test_cancel_mid_execution")
+        assert orch._safe_pause_active is True
+
+        safe_pause_completed = False
+        for _ in range(200):
+            snapshot = orch.step()
+            max_false_executions = max(max_false_executions, snapshot.false_executions)
+            if not orch._safe_pause_active:
+                safe_pause_completed = True
+                break
+
+        assert safe_pause_completed, "Safe pause never completed"
+        assert max_false_executions == 0
+
+        final_world = orch._read_world_state()
+        assert final_world.holding is False, (
+            "Object still held after revoke - unauthorized-position risk"
+        )
+        assert not orch.auth_manager.is_authorized(), (
+            "Stale token still active after safe pause"
+        )
+        assert orch.state_machine.state == ArmUIState.CONFIRMING
+        assert orch._awaiting_reauth is True
+
+        safe_home = np.array(config["planning"]["clean_table"]["safe_home_xyz"])
+        assert final_world.ee_position is not None
+        assert np.linalg.norm(final_world.ee_position - safe_home) < 0.05
     finally:
         orch.close()
