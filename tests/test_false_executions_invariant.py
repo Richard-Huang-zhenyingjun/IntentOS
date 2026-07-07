@@ -121,12 +121,21 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         for _ in range(300):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
-            if orch.grasp.is_holding():
+            # Real physics has IK-failure/trust-drop retry cycles that can
+            # trigger an automatic reauth (and briefly hold the object during
+            # a safe-pause deposit) outside of a genuine active EXECUTING
+            # plan. Only treat this as "mid-execution, holding" if all three
+            # hold at once: gripper closed, state machine actually EXECUTING,
+            # and no reauth/safe-pause already in flight.
+            if (
+                orch.grasp.is_holding()
+                and orch.state_machine.state == ArmUIState.EXECUTING
+                and not orch._safe_pause_active
+            ):
                 grasped = True
                 break
 
-        assert grasped, "Test setup failed: never reached a grasped state"
-        assert orch.state_machine.state == ArmUIState.EXECUTING
+        assert grasped, "Test setup failed: never reached a genuine mid-execution grasped state"
         assert orch.auth_manager.is_authorized()
 
         # Revoke authorization mid-execution: after GRASP, before RELEASE.
