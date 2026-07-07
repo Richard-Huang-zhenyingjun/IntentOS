@@ -103,10 +103,15 @@ def main():
     orch = build_system(config)
     try:
         orch.step()
-        target_id = orch.world_artifacts.object_ids[0]
-        target_obj = next(
-            o for o in orch.current_scene.objects_on_table if o.object_id == target_id
+        # Nearest object to the robot base, mirroring
+        # PlanCompiler._select_nearest_object() (same heuristic CLEAN_TABLE
+        # uses) - spawn-order index 0 can land outside the arm's IK limits.
+        robot_base_xy = np.array([0.0, 0.0])
+        target_obj = min(
+            orch.current_scene.objects_on_table,
+            key=lambda o: np.linalg.norm(np.array(o.pos_xyz[:2]) - robot_base_xy),
         )
+        target_id = target_obj.object_id
         print(f"\n[1/5] Target object {target_id} at {tuple(target_obj.pos_xyz)}")
 
         print("[2/5] Feeding a synthetic reach toward it (no camera in this demo)...")

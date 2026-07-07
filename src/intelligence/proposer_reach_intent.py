@@ -120,7 +120,17 @@ class ReachIntentProposer(ProposerBase):
         return "reach_intent"
 
     def is_available(self) -> bool:
-        return True
+        """
+        True only while a reach is genuinely committed.
+
+        ProposerRegistry.get_active_proposer_name() (used for logging/UI)
+        checks only is_available(), not the propose()-then-skip-IDLE
+        fallthrough propose() itself relies on - so this must reflect real
+        commitment, not "always available to be queried", or this proposer
+        would permanently report itself as the active one at its priority
+        even while idle.
+        """
+        return self.committed()
 
     def update_hand(self, hand: HandState) -> None:
         """Push one frame of hand state into the side-channel buffer."""
