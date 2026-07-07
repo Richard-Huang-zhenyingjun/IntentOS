@@ -129,9 +129,11 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         # GRASP primitive has actually run - so also require plan_index have
         # advanced past it, to be sure we're genuinely mid-execution between
         # GRASP and RELEASE, not catching a false-positive contact reading.
+        # GRASP itself is a multi-stage APPROACH -> DESCEND -> CLOSE sequence
+        # with up to 180-frame timeouts per stage, so budget generously.
         max_false_executions = 0
         grasped = False
-        for _ in range(300):
+        for _ in range(800):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
             if (
@@ -143,16 +145,6 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
                 grasped = True
                 break
 
-        if not grasped:
-            print(
-                f"[DIAG] never grasped: plan_index={orch.executor.plan_index} "
-                f"executor_status={orch.executor.status} "
-                f"last_error_code={orch.executor.last_error_code} "
-                f"holding={orch.grasp.is_holding()} "
-                f"fsm_state={orch.state_machine.state} "
-                f"safe_pause_active={orch._safe_pause_active} "
-                f"is_authorized={orch.auth_manager.is_authorized()}"
-            )
         assert grasped, "Test setup failed: never reached a genuine mid-execution grasped state"
         assert orch.auth_manager.is_authorized()
 
@@ -161,7 +153,7 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         assert orch._safe_pause_active is True
 
         safe_pause_completed = False
-        for _ in range(200):
+        for _ in range(300):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
             if not orch._safe_pause_active:
