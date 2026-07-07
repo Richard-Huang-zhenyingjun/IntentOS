@@ -12,3 +12,11 @@ data/eeg_training/
 
 # Local benchmark/result scratch files
 docs/*_results.txt
+
+# Reach-intent Stage-0 harness artifacts (local dev only)
+.venv311/
+reach_clips/
+
+# Session workspace/debug log dumps
+data/sessions/*.jsonl
+data/sessions/*.log

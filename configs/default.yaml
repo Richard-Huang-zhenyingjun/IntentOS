@@ -108,6 +108,15 @@ planning:
     workspace_bounds: [-0.6, 0.6, -0.6, 0.6, 0.0, 1.0]
     safe_home_xyz: [0.3, 0.0, 0.8]
 
+  # Assistive-reach (bring_closer) delivery scope. The compiler treats this
+  # as the sole source of truth for where a delivery may land — proposer
+  # metadata (e.g. reach_intent's delivery_zone_xyz) is never trusted here.
+  assistive_reach:
+    delivery_zone_name: "user_delivery_zone"
+    delivery_zone_center_xyz: [0.15, 0.0, 0.65]
+    delivery_zone_radius: 0.12
+    delivery_hover_height: 0.05
+
 # Proposer configuration
 proposer:
   active: "heuristic"  # "heuristic" | "gemini" (Week 4+)

@@ -22,8 +22,10 @@ class PlanCompiler(PlanCompilerBase):
     def __init__(self, config: dict):
         self.config = config
         self.clean_cfg = config['planning']['clean_table']
+        self.reach_cfg = (config.get('planning') or {}).get('assistive_reach')
         self.last_validation_error: ErrorCode = ErrorCode.NONE
-    
+        self.last_scope_rejection: Optional[str] = None
+
     def compile(
         self,
         proposal: IntentProposal,
@@ -31,12 +33,13 @@ class PlanCompiler(PlanCompilerBase):
     ) -> List[Primitive]:
         """Compile proposal into validated primitives"""
         self.last_validation_error = ErrorCode.NONE
+        self.last_scope_rejection = None
 
         # OpenVLA proposals carry fully formed trajectory metadata and should
         # compile to a single execution primitive.
         if self._is_openvla_proposal(proposal):
             return self._compile_openvla_plan(proposal)
-        
+
         if proposal.action == ActionType.CLEAN_TABLE:
             # If Gemini suggested specific objects (Week 5+), use those
             if proposal.suggested_object_ids:
@@ -45,15 +48,18 @@ class PlanCompiler(PlanCompilerBase):
                 )
             else:
                 target_obj = self._select_nearest_object(scene)
-            
+
             if target_obj is None:
                 return []
-            
+
             return self._compile_pick_place(target_obj, scene)
-        
+
+        elif proposal.action == ActionType.CLEAR_SPECIFIC:
+            return self._compile_assistive_reach(proposal, scene)
+
         elif proposal.action == ActionType.IDLE:
             return []  # No action
-        
+
         else:
             print(f"[COMPILER] Unknown action type: {proposal.action}")
             return []
@@ -205,7 +211,145 @@ class PlanCompiler(PlanCompilerBase):
         
         print(f"[COMPILER] Generated {len(plan)} primitives for object {target_obj.object_id}")
         return plan
-    
+
+    def _compile_assistive_reach(
+        self,
+        proposal: IntentProposal,
+        scene: SceneSummary,
+    ) -> List[Primitive]:
+        """
+        Generate primitive sequence for an assistive-reach (bring_closer) proposal.
+
+        The delivery zone is read from THIS compiler's own config, never from
+        proposal.metadata: the proposer is a low-confidence gesture inference
+        and must not get to decide where a delivery is allowed to land. Every
+        check below runs before any primitive is emitted; a single failure
+        rejects the whole plan.
+        """
+        zone = self._resolve_delivery_zone()
+        if zone is None:
+            return self._reject_reach("delivery zone is not configured", ErrorCode.UNKNOWN)
+        zone_name, zone_center, zone_radius, hover_height = zone
+
+        meta = proposal.metadata or {}
+        target_object_id = meta.get("target_object_id")
+        if target_object_id is None:
+            return self._reject_reach(
+                "no target object specified", ErrorCode.OBJECT_MISSING
+            )
+
+        suggested = list(proposal.suggested_object_ids or [])
+        if suggested != [target_object_id]:
+            return self._reject_reach(
+                f"assistive reach may only touch object {target_object_id!r}, "
+                f"got suggested_object_ids={suggested!r}",
+                ErrorCode.OBJECT_MISSING,
+            )
+
+        target_obj = next(
+            (obj for obj in scene.objects_on_table if obj.object_id == target_object_id),
+            None,
+        )
+        if target_obj is None:
+            return self._reject_reach(
+                f"object {target_object_id!r} is not a live table object",
+                ErrorCode.OBJECT_MISSING,
+            )
+
+        target_xyz = np.array(target_obj.pos_xyz)
+        if not self._validate_position(target_xyz):
+            return self._reject_reach(
+                f"object {target_object_id!r} at {target_xyz.tolist()} is outside workspace",
+                ErrorCode.OUT_OF_BOUNDS,
+            )
+
+        delivery_xyz = zone_center + np.array([0.0, 0.0, hover_height])
+        distance = float(np.linalg.norm(delivery_xyz - zone_center))
+        if distance > zone_radius:
+            return self._reject_reach(
+                f"delivery destination {delivery_xyz.tolist()} is outside the "
+                f"{zone_name!r} zone (radius {zone_radius})",
+                ErrorCode.OUT_OF_BOUNDS,
+            )
+
+        approach_height = self.clean_cfg['approach_height']
+        grasp_offset = self.clean_cfg['grasp_height_offset']
+
+        plan = [
+            # 1. Approach above object
+            Primitive(
+                type=PrimitiveType.REACH,
+                target_xyz=target_xyz + np.array([0, 0, approach_height]),
+                metadata={'step': 'approach', 'object_id': target_object_id}
+            ),
+
+            # 2. Descend to grasp height
+            Primitive(
+                type=PrimitiveType.REACH,
+                target_xyz=target_xyz + np.array([0, 0, grasp_offset]),
+                metadata={'step': 'pre_grasp'}
+            ),
+
+            # 3. Grasp object
+            Primitive(
+                type=PrimitiveType.GRASP,
+                object_id=target_object_id,
+                metadata={
+                    'step': 'grasp',
+                    'object_id': target_object_id,
+                    'object_position': target_xyz.tolist(),
+                }
+            ),
+
+            # 4. Lift object
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=target_xyz + np.array([0, 0, approach_height]),
+                metadata={'step': 'lift'}
+            ),
+
+            # 5. Deliver to the configured zone (final MOVE_TO)
+            Primitive(
+                type=PrimitiveType.MOVE_TO,
+                target_xyz=delivery_xyz,
+                metadata={'step': 'deliver', 'zone_name': zone_name}
+            ),
+        ]
+
+        print(
+            f"[COMPILER] Generated {len(plan)} assistive-reach primitives "
+            f"for object {target_object_id}"
+        )
+        return plan
+
+    def _resolve_delivery_zone(
+        self,
+    ) -> Optional[tuple]:
+        """
+        Read the user_delivery_zone from config. Returns None if missing or
+        malformed rather than raising, so a bad/absent config rejects the
+        plan instead of crashing the compiler.
+        """
+        cfg = self.reach_cfg
+        if not cfg:
+            return None
+        try:
+            name = str(cfg['delivery_zone_name'])
+            center = np.array(cfg['delivery_zone_center_xyz'], dtype=float)
+            radius = float(cfg['delivery_zone_radius'])
+            hover_height = float(cfg.get('delivery_hover_height', 0.0))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if center.shape != (3,) or radius <= 0.0:
+            return None
+        return name, center, radius, hover_height
+
+    def _reject_reach(self, reason: str, error_code: ErrorCode) -> List[Primitive]:
+        print(f"[COMPILER] Assistive reach rejected: {reason}")
+        self.last_validation_error = error_code
+        self.last_scope_rejection = reason
+        return []
+
     def _validate_position(self, xyz: np.ndarray) -> bool:
         """Check if position is within workspace bounds"""
         bounds = self.clean_cfg['workspace_bounds']
