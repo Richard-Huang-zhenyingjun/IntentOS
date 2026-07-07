@@ -112,6 +112,12 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
     real mechanism directly rather than inventing a new one.
     """
     config = _base_config(tmp_path)
+    # Force the heuristic CLEAN_TABLE proposer: OpenVLA is registered at
+    # priority 15 (> heuristic's 0) and compiles to a single opaque
+    # OPENVLA_TRAJECTORY primitive, not the discrete REACH/GRASP/MOVE_TO/
+    # RELEASE sequence this test needs to interrupt between GRASP and RELEASE.
+    config.setdefault("openvla", {})
+    config["openvla"]["enabled"] = False
     orch = build_system(config)
     try:
         _install_scheduled_input(orch, config)
