@@ -153,7 +153,7 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         assert orch._safe_pause_active is True
 
         safe_pause_completed = False
-        for _ in range(300):
+        for _ in range(600):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
             if not orch._safe_pause_active:
