@@ -103,14 +103,24 @@ def main():
     orch = build_system(config)
     try:
         orch.step()
-        # Nearest object to the robot base, mirroring
-        # PlanCompiler._select_nearest_object() (same heuristic CLEAN_TABLE
-        # uses) - spawn-order index 0 can land outside the arm's IK limits.
+        # Nearest-to-base first (mirroring PlanCompiler._select_nearest_object,
+        # the same heuristic CLEAN_TABLE uses), but verified reachable:
+        # "nearest in xy" alone is not a reliable IK-reachability proxy, so
+        # filter with controller._compute_ik() (pure feasibility check, no
+        # motion) before committing to a target.
+        approach_height = config["planning"]["clean_table"]["approach_height"]
         robot_base_xy = np.array([0.0, 0.0])
-        target_obj = min(
+        candidates = sorted(
             orch.current_scene.objects_on_table,
             key=lambda o: np.linalg.norm(np.array(o.pos_xyz[:2]) - robot_base_xy),
         )
+        target_obj = None
+        for obj in candidates:
+            approach_target = np.array(obj.pos_xyz) + np.array([0, 0, approach_height])
+            if orch.controller._compute_ik(approach_target) is not None:
+                target_obj = obj
+                break
+        assert target_obj is not None, "no reachable object found in this scene"
         target_id = target_obj.object_id
         print(f"\n[1/5] Target object {target_id} at {tuple(target_obj.pos_xyz)}")
 

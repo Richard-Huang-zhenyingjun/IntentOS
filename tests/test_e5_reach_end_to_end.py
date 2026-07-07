@@ -127,17 +127,27 @@ def _commit_reach_to_object(orch, target_object_id):
     return reach_proposer
 
 
-def _nearest_object_id(orch):
-    """Pick the object closest to the robot base, mirroring
+def _reachable_target_id(orch, config):
+    """
+    Pick a real, currently-reachable object, nearest-to-base first (mirroring
     PlanCompiler._select_nearest_object() - CLEAN_TABLE uses the same
-    heuristic. object_ids[0] is spawn order, not reachability, and can land
-    outside the arm's IK limits."""
+    heuristic), but verified: CI showed "nearest to origin in xy" is not a
+    reliable proxy for "within IK joint limits" - a real IntentOS.
+    controller._compute_ik() call is a pure feasibility check (no motion, no
+    side effects) so each candidate can be filtered before committing a whole
+    test flow to it.
+    """
+    approach_height = config["planning"]["clean_table"]["approach_height"]
     robot_base_xy = np.array([0.0, 0.0])
-    nearest = min(
+    candidates = sorted(
         orch.current_scene.objects_on_table,
         key=lambda obj: np.linalg.norm(np.array(obj.pos_xyz[:2]) - robot_base_xy),
     )
-    return nearest.object_id
+    for obj in candidates:
+        approach_target = np.array(obj.pos_xyz) + np.array([0, 0, approach_height])
+        if orch.controller._compute_ik(approach_target) is not None:
+            return obj.object_id
+    raise RuntimeError("no reachable object found in this scene")
 
 
 class _FixedDecision:
@@ -196,7 +206,7 @@ def test_reach_confirm_authorizes_and_executes_via_generic_path(tmp_path):
     orch = build_system(config)
     try:
         orch.step()  # populate current_scene with real object positions
-        target_id = _nearest_object_id(orch)
+        target_id = _reachable_target_id(orch, config)
         _commit_reach_to_object(orch, target_id)
 
         _install_scheduled_confirms(orch, config, confirm_frames=[5, 15])
@@ -240,7 +250,7 @@ def test_reach_cancel_mid_grasp_ends_safe(tmp_path):
     orch = build_system(config)
     try:
         orch.step()
-        target_id = _nearest_object_id(orch)
+        target_id = _reachable_target_id(orch, config)
         _commit_reach_to_object(orch, target_id)
 
         _install_scheduled_confirms(orch, config, confirm_frames=[5, 15])
@@ -347,7 +357,7 @@ def test_reach_rejects_missing_zone_end_to_end(tmp_path):
     orch = build_system(config)
     try:
         orch.step()
-        target_id = _nearest_object_id(orch)
+        target_id = _reachable_target_id(orch, config)
         _commit_reach_to_object(orch, target_id)
 
         _install_scheduled_confirms(orch, config, confirm_frames=[5, 15])
@@ -373,7 +383,7 @@ def test_reach_ignores_arbitrary_attacker_xyz_end_to_end(tmp_path):
     orch = build_system(config)
     try:
         orch.step()
-        target_id = _nearest_object_id(orch)
+        target_id = _reachable_target_id(orch, config)
 
         tampered = _TamperedReachProposer(
             proposal=IntentProposal(
