@@ -142,6 +142,14 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
                 break
 
         assert grasped, "Test setup failed: never reached a genuine mid-execution grasped state"
+        print(
+            f"[DIAG] pre-revoke: plan_index={orch.executor.plan_index} "
+            f"active_plan_len={len(orch.executor.active_plan) if orch.executor.active_plan else None} "
+            f"executor_status={orch.executor.status} "
+            f"active_primitive_started={orch.executor.active_primitive_started} "
+            f"is_authorized={orch.auth_manager.is_authorized()} "
+            f"token_id={orch.auth_manager.get_active_token_id()!r}"
+        )
         assert orch.auth_manager.is_authorized()
 
         # Revoke authorization mid-execution: after GRASP, before RELEASE.
@@ -149,9 +157,18 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         assert orch._safe_pause_active is True
 
         safe_pause_completed = False
-        for _ in range(200):
+        for i in range(200):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
+            if i < 5 or i % 40 == 0:
+                print(
+                    f"[DIAG] tick {i}: plan_index={orch.executor.plan_index} "
+                    f"active_plan_len={len(orch.executor.active_plan) if orch.executor.active_plan else None} "
+                    f"executor_status={orch.executor.status} "
+                    f"safe_pause_active={orch._safe_pause_active} "
+                    f"safe_pause_primitives_len={len(orch._safe_pause_primitives)} "
+                    f"holding={orch.grasp.is_holding()}"
+                )
             if not orch._safe_pause_active:
                 safe_pause_completed = True
                 break
