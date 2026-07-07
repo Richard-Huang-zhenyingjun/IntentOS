@@ -143,6 +143,16 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
                 grasped = True
                 break
 
+        if not grasped:
+            print(
+                f"[DIAG] never grasped: plan_index={orch.executor.plan_index} "
+                f"executor_status={orch.executor.status} "
+                f"last_error_code={orch.executor.last_error_code} "
+                f"holding={orch.grasp.is_holding()} "
+                f"fsm_state={orch.state_machine.state} "
+                f"safe_pause_active={orch._safe_pause_active} "
+                f"is_authorized={orch.auth_manager.is_authorized()}"
+            )
         assert grasped, "Test setup failed: never reached a genuine mid-execution grasped state"
         assert orch.auth_manager.is_authorized()
 
