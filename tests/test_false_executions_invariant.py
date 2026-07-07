@@ -169,11 +169,19 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         # 0.08 and the 0.04-per-joint limit) with force=60.0, a likely
         # controller-saturation artifact from commanding a target beyond the
         # joint limit - not a real grip. That heuristic is unrelated to the
-        # revoke/safe-pause fix under test here, so use the authoritative
-        # signal instead: attached_object_id, which _execute_release() clears
-        # (alongside actually removing the pybullet constraint) regardless of
-        # this force reading.
-        assert orch.grasp.attached_object_id is None, (
+        # revoke/safe-pause fix under test here.
+        #
+        # grasp.attached_object_id is NOT the fix either: it's the legacy
+        # compat API's own field, set only by GraspController.attach()/
+        # detach(), neither of which the real multi-stage grasp/release in
+        # primitive_executor.py ever calls (confirmed by reading
+        # _execute_grasp/_execute_release directly - they track their own
+        # pybullet constraint in self._grasp_constraint_id instead). So this
+        # field stays None the entire run regardless of real attachment
+        # state - checking "is None" here was vacuously true, not a real
+        # verification. executor.is_holding_object() (constraint-based) is
+        # the authoritative signal.
+        assert not orch.executor.is_holding_object(), (
             "Object still attached after revoke - unauthorized-position risk"
         )
         assert not orch.auth_manager.is_authorized(), (

@@ -229,8 +229,13 @@ def test_reach_confirm_authorizes_and_executes_via_generic_path(tmp_path):
         assert max_false_executions == 0
 
         # bring_closer holds the object at the delivery zone - no RELEASE
-        # primitive - so attached_object_id should still be the target.
-        assert orch.grasp.attached_object_id == target_id
+        # primitive - so it should still be attached. grasp.attached_object_id
+        # is the legacy compat API and is never touched by the real
+        # multi-stage grasp/release in primitive_executor.py (which tracks
+        # its own pybullet constraint); executor.is_holding_object() is the
+        # authoritative signal.
+        assert orch.executor.is_holding_object()
+        assert orch.executor._last_grasped_object_id == target_id
 
         zone_center = np.array(
             config["planning"]["assistive_reach"]["delivery_zone_center_xyz"]
@@ -286,7 +291,10 @@ def test_reach_cancel_mid_grasp_ends_safe(tmp_path):
         # SafePauseHelper's own deposit-then-home always releases into the
         # bin regardless of which proposal triggered the grasp - that is the
         # correct generic safety behavior, not reach-specific handling.
-        assert orch.grasp.attached_object_id is None, (
+        # executor.is_holding_object() is the authoritative signal (see the
+        # note in the happy-path test - grasp.attached_object_id is the
+        # legacy compat API and is never touched by the real grasp/release).
+        assert not orch.executor.is_holding_object(), (
             "object still attached after revoke - unauthorized-position risk"
         )
         assert not orch.auth_manager.is_authorized()
@@ -343,7 +351,7 @@ def test_reach_rejects_wrong_object_end_to_end(tmp_path):
         assert idled, "expected rejection to reset the state machine to IDLE"
         assert max_false_executions == 0
         assert orch.executor.active_plan in (None, [])
-        assert orch.grasp.attached_object_id is None
+        assert not orch.executor.is_holding_object()
     finally:
         orch.close()
 
@@ -368,7 +376,7 @@ def test_reach_rejects_missing_zone_end_to_end(tmp_path):
         assert idled, "expected rejection (missing zone config) to reset to IDLE"
         assert max_false_executions == 0
         assert orch.executor.active_plan in (None, [])
-        assert orch.grasp.attached_object_id is None
+        assert not orch.executor.is_holding_object()
     finally:
         orch.close()
 
