@@ -122,34 +122,28 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
     try:
         _install_scheduled_input(orch, config)
 
+        # GRASP is primitive index 2 in the compiled CLEAN_TABLE plan (approach,
+        # pre_grasp, GRASP, lift, move_to_bin, lower_to_drop, RELEASE, home).
+        # grasp.is_holding() does a live physical verify_grasp() check, which
+        # can read True from incidental finger/object contact before the
+        # GRASP primitive has actually run - so also require plan_index have
+        # advanced past it, to be sure we're genuinely mid-execution between
+        # GRASP and RELEASE, not catching a false-positive contact reading.
         max_false_executions = 0
         grasped = False
         for _ in range(300):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
-            # Real physics has IK-failure/trust-drop retry cycles that can
-            # trigger an automatic reauth (and briefly hold the object during
-            # a safe-pause deposit) outside of a genuine active EXECUTING
-            # plan. Only treat this as "mid-execution, holding" if all three
-            # hold at once: gripper closed, state machine actually EXECUTING,
-            # and no reauth/safe-pause already in flight.
             if (
                 orch.grasp.is_holding()
                 and orch.state_machine.state == ArmUIState.EXECUTING
                 and not orch._safe_pause_active
+                and orch.executor.plan_index > 2
             ):
                 grasped = True
                 break
 
         assert grasped, "Test setup failed: never reached a genuine mid-execution grasped state"
-        print(
-            f"[DIAG] pre-revoke: plan_index={orch.executor.plan_index} "
-            f"active_plan_len={len(orch.executor.active_plan) if orch.executor.active_plan else None} "
-            f"executor_status={orch.executor.status} "
-            f"active_primitive_started={orch.executor.active_primitive_started} "
-            f"is_authorized={orch.auth_manager.is_authorized()} "
-            f"token_id={orch.auth_manager.get_active_token_id()!r}"
-        )
         assert orch.auth_manager.is_authorized()
 
         # Revoke authorization mid-execution: after GRASP, before RELEASE.
@@ -157,18 +151,9 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         assert orch._safe_pause_active is True
 
         safe_pause_completed = False
-        for i in range(200):
+        for _ in range(200):
             snapshot = orch.step()
             max_false_executions = max(max_false_executions, snapshot.false_executions)
-            if i < 5 or i % 40 == 0:
-                print(
-                    f"[DIAG] tick {i}: plan_index={orch.executor.plan_index} "
-                    f"active_plan_len={len(orch.executor.active_plan) if orch.executor.active_plan else None} "
-                    f"executor_status={orch.executor.status} "
-                    f"safe_pause_active={orch._safe_pause_active} "
-                    f"safe_pause_primitives_len={len(orch._safe_pause_primitives)} "
-                    f"holding={orch.grasp.is_holding()}"
-                )
             if not orch._safe_pause_active:
                 safe_pause_completed = True
                 break

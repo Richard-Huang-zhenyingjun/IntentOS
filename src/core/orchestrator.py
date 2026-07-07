@@ -768,9 +768,15 @@ class Orchestrator:
             self._awaiting_reauth = True
             return
         
-        # Execute safe pause primitives via executor
-        # If executor is idle, start the safe pause plan
-        if self.executor.status == ExecutorStatus.IDLE:
+        # Execute safe pause primitives via executor, preempting whatever plan
+        # was previously active (RUNNING or FAILED - not just IDLE). The
+        # interrupted plan's token was just invalidated by _trigger_reauth,
+        # so its next primitive would fail authorization and latch the
+        # executor in FAILED forever - which is never IDLE - leaving this
+        # safe-pause plan permanently unable to start. Preempting by identity
+        # instead of waiting for IDLE ensures the deposit-then-home sequence
+        # always actually runs.
+        if self.executor.active_plan is not self._safe_pause_primitives:
             self.executor.start_plan(self._safe_pause_primitives)
         
         # Execute one tick
