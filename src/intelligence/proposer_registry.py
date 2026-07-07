@@ -69,7 +69,12 @@ class ProposerRegistry:
             self._fallback_name = name
         
         logger.info(f"[REGISTRY] Registered proposer '{name}' (priority={priority}, fallback={is_fallback})")
-    
+
+    def get(self, name: str) -> Optional[ProposerBase]:
+        """Look up a registered proposer by name, e.g. for a side-channel push
+        (reach-intent's update_hand()) or a committed-target query."""
+        return self._proposers.get(name)
+
     def set_blocked_states(self, states: set):
         """
         Set FSM states during which external proposers are blocked.

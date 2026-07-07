@@ -8,6 +8,7 @@ from src.core.orchestrator import Orchestrator
 from src.intelligence.proposer_registry import ProposerRegistry
 from src.intelligence.proposer_heuristic import HeuristicProposer
 from src.intelligence.proposer_gemini import GeminiProposer
+from src.intelligence.proposer_reach import ReachIntentProposer
 from src.external.openvla.proposer_openvla import OpenVLAProposer
 from src.external.openvla.action_translator_fake import FakeActionTranslator
 from src.intelligence.scene_summarizer import SceneSummarizer
@@ -96,6 +97,28 @@ def build_system(config: dict) -> Orchestrator:
         openvla_priority = config.get("openvla", {}).get("priority", 15)
         registry.register("openvla", openvla_proposer, priority=openvla_priority)
         print(f"[FACTORY] OpenVLA proposer registered (priority={openvla_priority})")
+
+    # Assistive reach: registers like any other proposer. It returns IDLE
+    # (confidence=0.0) whenever there's no committed reach, so the registry's
+    # existing fallthrough (propose() skips IDLE/0.0 proposals) means it never
+    # displaces heuristic/openvla/gemini unless a user is genuinely reaching.
+    # Priority above openvla/gemini: a live human reach should outrank
+    # autonomous suggestions. Delivery-zone values here are proposer metadata
+    # only (informational) - PlanCompiler independently reads its own
+    # planning.assistive_reach config and never trusts this proposer's zone.
+    reach_cfg = config.get("reach_intent", {})
+    if reach_cfg.get("enabled", True):
+        assist_zone_cfg = config.get("planning", {}).get("assistive_reach", {})
+        reach_proposer = ReachIntentProposer(
+            config=config,
+            delivery_zone_name=assist_zone_cfg.get("delivery_zone_name", "user_delivery_zone"),
+            delivery_zone_xyz=tuple(
+                assist_zone_cfg.get("delivery_zone_center_xyz", (0.15, 0.0, 0.65))
+            ),
+        )
+        reach_priority = reach_cfg.get("priority", 20)
+        registry.register("reach_intent", reach_proposer, priority=reach_priority)
+        print(f"[FACTORY] Reach-intent proposer registered (priority={reach_priority})")
     
     # Week 4: Gemini proposer (if enabled)
     gemini_cfg = config.get('gemini', {})

@@ -40,6 +40,7 @@ class ArmActionType(str, Enum):
     GRASP = "grasp"
     PLACE = "place"
     CLEAN_TABLE = "clean_table"  # Week 1: Clean messy table
+    CLEAR_SPECIFIC = "clear_specific"  # Assistive reach: bring one object closer
     IDLE = "idle"                # Week 1: No action needed
     
     def __str__(self) -> str:

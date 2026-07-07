@@ -250,8 +250,12 @@ class Orchestrator:
         
         if state == 'idle':
             if decision_frame.is_confirm:
+                if self.state_machine.target_id is None:
+                    reach_target_id = self._reach_committed_target_id()
+                    if reach_target_id is not None:
+                        self.force_lock_target(reach_target_id)
                 self.state_machine._transition_to(ArmUIState.SELECTING)
-        
+
         elif state == 'selecting':
             self.current_proposal = self.proposer_registry.propose(self.current_scene)
             if self.current_proposal and self.current_proposal.action != InterfaceActionType.IDLE:
@@ -968,6 +972,26 @@ class Orchestrator:
             awaiting_object_confirm=self._awaiting_object_confirm,
         )
     
+    def _reach_committed_target_id(self) -> Optional[int]:
+        """
+        Return the reach-intent proposer's committed target, if any.
+
+        Read-only query into the registered "reach_intent" proposer (if
+        present) so a genuine reach can supply which object to lock, via the
+        same force_lock_target() gate every other target-lock uses. Confirm
+        still comes from the normal decision pipeline - this only answers
+        "which object", never triggers or bypasses authorization.
+        """
+        reach_proposer = self.proposer_registry.get("reach_intent")
+        if reach_proposer is None or not hasattr(reach_proposer, "committed"):
+            return None
+        if not reach_proposer.committed():
+            return None
+        decision = reach_proposer.estimate(self.current_scene)
+        if decision.committed and decision.target_object_id is not None:
+            return decision.target_object_id
+        return None
+
     def force_lock_target(self, object_id: int):
         """Manually lock target (L key)."""
         if self.sim.is_valid_object(object_id):
