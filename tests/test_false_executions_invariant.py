@@ -163,6 +163,14 @@ def test_cancel_mid_execution_after_grasp_before_release_ends_safe(tmp_path):
         assert safe_pause_completed, "Safe pause never completed"
         assert max_false_executions == 0
 
+        # grasp.is_holding() is a live contact/force check, not a flag cleared
+        # the instant RELEASE fires - give the object a few ticks to actually
+        # separate from the open gripper under gravity before reading it.
+        for _ in range(30):
+            snapshot = orch.step()
+            max_false_executions = max(max_false_executions, snapshot.false_executions)
+        assert max_false_executions == 0
+
         final_world = orch._read_world_state()
         assert final_world.holding is False, (
             "Object still held after revoke - unauthorized-position risk"
