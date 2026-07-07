@@ -17,8 +17,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install headless rendering libs (mujoco needs GL)
+        run: sudo apt-get update && sudo apt-get install -y libosmesa6 libgl1 libglx-mesa0
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run tests
-        run: python -u -m pytest tests/ -v 2>&1
+        env:
+          MUJOCO_GL: osmesa
+        run: pytest tests/
